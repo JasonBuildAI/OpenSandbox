@@ -1120,6 +1120,44 @@ revision installation, and installation confirmation is not transport drain or
 public mutation completion. Selective TLS, live admissions and request hooks
 remain disabled for the installation-only backend.
 
+An internal, HTTP-unwired effective-policy candidate now freezes explicit user,
+ordered always-deny/allow, and resolved telemetry rules without loader callbacks.
+The independent immutable policy-base handle and authoritative Store must both
+be supplied when validating a candidate under the shared mutation barrier.
+Replacing the base handle invalidates older candidates even if policy content
+and epoch repeat; the Store's private mutation identity rejects Vault changes,
+including absent/create/delete and delete/recreate public-revision ABA.
+This foundation does not track the live current base or publish policy epochs.
+
+Preparation revalidates every Vault binding, including HTTP-only bindings, and
+adds a conservative ordered whole-selector coverage proof for wildcard hosts.
+An exact or nested wildcard deny is rejected unless an earlier allow covers
+its overlap; nameserver nft allowances cannot authorize credential bindings.
+The helper preserves first-match policy semantics and does not alter legacy
+public Vault validation. Coverage is fail-closed: it does not prove that a union
+of narrower selectors exhausts a maximum-length wildcard's finite DNS names.
+
+The Store captures its existing pinned rendered snapshot under the same lock as
+binding validation and mutation identity. Bound Vaults created by legacy
+Create/Patch without a committed rendered candidate are rejected rather than
+re-resolving credentials. An empty Vault preserves its positive revision and
+exists state; an absent Vault remains absent. Policy-only preparation changes
+neither public Vault revision nor rendered credential bytes. Canonical decision
+bytes and digest use prospective policy epoch `base + 1`, including identical
+inputs; repeated preparation does not consume epochs. No-op selection remains
+the future publication owner's responsibility. The digest authenticates the
+decision payload (Vault and epoch), not the frozen policy inputs; different
+candidates from the same base can share it. The future effect owner must bind
+external effects to the exact candidate, not infer policy identity from digest.
+
+The candidate integration test reuses the real Go-to-Python IPC fixture to
+check prospective epoch/digest installation with admissions disabled and
+unchanged control-plane base/Vault state. It requires Unix socket permission
+and fails on setup errors. This slice supplies no disk/nft effects, live policy
+publication, rollback/crash durability, public mutation acknowledgement, or
+TLS/request/fast-sandbox activation. A later effect owner must establish those
+boundaries before wiring the candidate into public mutations.
+
 1. **Decision telemetry and red tests**
    - Add fail-closed tests that distinguish authoritative empty from lookup
      failure.
