@@ -497,6 +497,36 @@ func Test_refreshFreePods(t *testing.T) {
 			expectedFree:  0,
 			expectedNames: []string{},
 		},
+		{
+			name: "pods explicitly marked NotReady are not free",
+			allPods: []*corev1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "pod-ready"},
+					Status:     corev1.PodStatus{PodIP: "1.1.1.1"},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "pod-notready"},
+					Status: corev1.PodStatus{
+						PodIP: "1.1.1.2",
+						Conditions: []corev1.PodCondition{
+							{Type: corev1.PodReady, Status: corev1.ConditionFalse},
+						},
+					},
+				},
+				{
+					// No PodReady condition at all: readiness simply has not been
+					// observed, which is not a NotReady verdict, so the pod stays
+					// free. This is deliberate.
+					ObjectMeta: metav1.ObjectMeta{Name: "pod-unknown-readiness"},
+					Status:     corev1.PodStatus{PodIP: "1.1.1.3"},
+				},
+			},
+			taskNodes: []*taskNode{
+				{ObjectMeta: metav1.ObjectMeta{Name: "task-1"}},
+			},
+			expectedFree:  2,
+			expectedNames: []string{"pod-ready", "pod-unknown-readiness"},
+		},
 	}
 
 	for _, tt := range tests {

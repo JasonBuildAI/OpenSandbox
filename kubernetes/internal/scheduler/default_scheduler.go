@@ -397,11 +397,29 @@ func (sch *defaultTaskScheduler) refreshFreePods() {
 	// Rebuild freePods list with only unassigned pods that have IP addresses
 	sch.freePods = make([]*corev1.Pod, 0, len(sch.allPods)/2)
 	for _, pod := range sch.allPods {
-		// Only consider pods with IP addresses as free for assignment
-		if !assignedPods[pod.Name] && pod.Status.PodIP != "" {
+		// Only consider pods with IP addresses as free for assignment, and skip
+		// any pod Kubernetes has already declared NotReady: the task is bound to
+		// the pod IP immediately, so admitting a pod that is not serving yet
+		// sends the task to an endpoint that cannot accept it.
+		if !assignedPods[pod.Name] && pod.Status.PodIP != "" && !isPodNotReady(pod) {
 			sch.freePods = append(sch.freePods, pod)
 		}
 	}
+}
+
+// isPodNotReady reports whether Kubernetes has explicitly declared the pod
+// NotReady (a PodReady condition whose status is ConditionFalse).
+//
+// It deliberately returns false when the pod carries no PodReady condition at
+// all, so that pods whose status has not been observed yet are unaffected; only
+// an explicit NotReady verdict removes a pod from the free list.
+func isPodNotReady(pod *corev1.Pod) bool {
+	for i := range pod.Status.Conditions {
+		if pod.Status.Conditions[i].Type == corev1.PodReady {
+			return pod.Status.Conditions[i].Status == corev1.ConditionFalse
+		}
+	}
+	return false
 }
 
 // assignTaskNodes handles all unassigned tasks in batch
