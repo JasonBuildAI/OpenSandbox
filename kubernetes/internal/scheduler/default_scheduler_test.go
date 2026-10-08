@@ -514,18 +514,30 @@ func Test_refreshFreePods(t *testing.T) {
 					},
 				},
 				{
+					// ConditionUnknown means the node is degraded or partitioned
+					// (lease expired, probe undetermined) while the pod may still
+					// hold its IP: kubelet's own verdict, so the pod is blocked.
+					ObjectMeta: metav1.ObjectMeta{Name: "pod-ready-unknown"},
+					Status: corev1.PodStatus{
+						PodIP: "1.1.1.3",
+						Conditions: []corev1.PodCondition{
+							{Type: corev1.PodReady, Status: corev1.ConditionUnknown},
+						},
+					},
+				},
+				{
 					// No PodReady condition at all: readiness simply has not been
-					// observed, which is not a NotReady verdict, so the pod stays
-					// free. This is deliberate.
-					ObjectMeta: metav1.ObjectMeta{Name: "pod-unknown-readiness"},
-					Status:     corev1.PodStatus{PodIP: "1.1.1.3"},
+					// observed, which is not a verdict, so the pod stays free.
+					// This is deliberate.
+					ObjectMeta: metav1.ObjectMeta{Name: "pod-unobserved-readiness"},
+					Status:     corev1.PodStatus{PodIP: "1.1.1.4"},
 				},
 			},
 			taskNodes: []*taskNode{
 				{ObjectMeta: metav1.ObjectMeta{Name: "task-1"}},
 			},
 			expectedFree:  2,
-			expectedNames: []string{"pod-ready", "pod-unknown-readiness"},
+			expectedNames: []string{"pod-ready", "pod-unobserved-readiness"},
 		},
 	}
 
