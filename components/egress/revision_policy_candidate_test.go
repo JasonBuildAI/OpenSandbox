@@ -220,3 +220,44 @@ func TestEffectivePolicyCandidateDigestIsDecisionPayloadOnly(t *testing.T) {
 	require.NoError(t, base.Validate(store, second))
 	require.Equal(t, int64(3), base.epoch)
 }
+
+func TestEffectivePolicyCandidatePreparePropagatesValidationContext(t *testing.T) {
+	inputs := policyCandidateInputs(t)
+	var err error
+	inputs.user, err = policy.ParsePolicy(`{"defaultAction":"deny","egress":[{"action":"allow","target":"*.example.com"}]}`)
+	require.NoError(t, err)
+	store := credentialvault.NewStore(nil, nil)
+	request := integrationVaultRequest("private-policy-candidate")
+	request.Bindings[0].Match.Hosts = []string{"*.example.com"}
+	mutation, err := store.PrepareCreate(request, inputs.user)
+	require.NoError(t, err)
+	snapshot, err := mutation.ActiveSnapshot(context.Background())
+	require.NoError(t, err)
+	state, err := store.CommitCandidate(mutation)
+	require.NoError(t, err)
+	base, err := newEffectivePolicyBase(inputs, 7)
+	require.NoError(t, err)
+	valid, err := base.Prepare(store, inputs)
+	require.NoError(t, err)
+	for _, tc := range []struct{ policy, reason string }{
+		{`{"defaultAction":"deny"}`, `binding "api" host "*.example.com" is not allowed by egress policy`},
+		{`{"defaultAction":"deny","egress":[{"action":"deny","target":"private.example.com"},{"action":"allow","target":"*.example.com"}]}`, `binding "api" host "*.example.com" is not entirely allowed by egress policy`},
+	} {
+		next := policyCandidateInputs(t)
+		next.user, err = policy.ParsePolicy(tc.policy)
+		require.NoError(t, err)
+		rejected, err := base.Prepare(store, next)
+		require.Nil(t, rejected)
+		require.ErrorIs(t, err, credentialvault.ErrInvalidCandidate)
+		require.Contains(t, err.Error(), tc.reason)
+		require.NotContains(t, err.Error(), "private-policy-candidate")
+		require.NoError(t, base.Validate(store, valid))
+		require.Equal(t, int64(7), base.epoch)
+		after, stateErr := store.Sanitized()
+		require.NoError(t, stateErr)
+		require.Equal(t, state, after)
+		active, snapshotErr := store.ActiveSnapshot()
+		require.NoError(t, snapshotErr)
+		require.Equal(t, snapshot, active)
+	}
+}

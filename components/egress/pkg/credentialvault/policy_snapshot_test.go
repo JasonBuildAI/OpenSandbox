@@ -204,3 +204,72 @@ func TestPolicySnapshotAbsentABARemainsStale(t *testing.T) {
 	require.False(t, frozen.Exists())
 	require.Zero(t, frozen.Snapshot().Revision)
 }
+
+func TestPolicySnapshotValidationErrorsRetainSafeContext(t *testing.T) {
+	for _, kind := range []string{"policy", "credential reference", "ambiguity", "whole selector"} {
+		t.Run(kind, func(t *testing.T) {
+			var resolves atomic.Int32
+			registry := NewSourceRegistry()
+			registry.Register("rotating-candidate", func(json.RawMessage) (CredentialSource, error) {
+				return &rotatingCandidateSource{resolves: &resolves}, nil
+			})
+			store := NewStoreWithRegistry(nil, nil, registry)
+			allow := testCredentialPolicy(t, `{"defaultAction":"deny","egress":[{"action":"allow","target":"*.example.com"}]}`)
+			req := testCredentialVaultRequest()
+			req.Credentials[0].Source = json.RawMessage(`{"type":"rotating-candidate"}`)
+			if kind == "whole selector" {
+				req.Bindings[0].Match.Hosts = []string{"*.example.com"}
+			}
+			mutation, err := store.PrepareCreate(req, allow)
+			require.NoError(t, err)
+			rendered, err := mutation.ActiveSnapshot(context.Background())
+			require.NoError(t, err)
+			_, err = store.CommitCandidate(mutation)
+			require.NoError(t, err)
+			frozen, err := store.FreezeForPolicy(allow)
+			require.NoError(t, err)
+			proposed := allow
+			wanted := []string{`"gitlab-api"`}
+			switch kind {
+			case "policy":
+				proposed = testCredentialPolicy(t, `{"defaultAction":"deny"}`)
+				wanted = append(wanted, `host "code.example.com" is not allowed by egress policy`)
+			case "credential reference":
+				// Simulate inconsistent internal state without invoking a write path that
+				// already rejects unknown references before this validation boundary.
+				store.mu.Lock()
+				delete(store.credentials, "gitlab-token")
+				store.mu.Unlock()
+				wanted = append(wanted, `references unknown credential "gitlab-token"`)
+			case "ambiguity":
+				store.mu.Lock()
+				duplicate := cloneBinding(store.bindings["gitlab-api"])
+				duplicate.Name = "duplicate-api"
+				store.bindings[duplicate.Name] = duplicate
+				store.mu.Unlock()
+				// Map iteration determines the pair's order; assert names independently.
+				wanted = append(wanted, `"duplicate-api"`, "can match the same request")
+			case "whole selector":
+				proposed = testCredentialPolicy(t, `{"defaultAction":"deny","egress":[{"action":"deny","target":"private.example.com"},{"action":"allow","target":"*.example.com"}]}`)
+				wanted = append(wanted, `host "*.example.com" is not entirely allowed by egress policy`)
+			}
+			before, err := store.Sanitized()
+			require.NoError(t, err)
+			rejected, err := store.FreezeForPolicy(proposed)
+			require.Nil(t, rejected)
+			require.ErrorIs(t, err, ErrInvalidCandidate)
+			for _, fragment := range wanted {
+				require.Contains(t, err.Error(), fragment)
+			}
+			require.NotContains(t, err.Error(), "resolved-secret-1")
+			require.Equal(t, int32(1), resolves.Load(), "rejected preparation must not resolve sources")
+			require.NoError(t, store.ValidatePolicySnapshot(frozen), "rejection must preserve mutation identity")
+			after, stateErr := store.Sanitized()
+			require.NoError(t, stateErr)
+			require.Equal(t, before, after)
+			active, snapshotErr := store.ActiveSnapshot()
+			require.NoError(t, snapshotErr)
+			require.Equal(t, rendered, active)
+		})
+	}
+}

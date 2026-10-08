@@ -14,7 +14,11 @@
 
 package credentialvault
 
-import "github.com/alibaba/opensandbox/egress/pkg/policy"
+import (
+	"fmt"
+
+	"github.com/alibaba/opensandbox/egress/pkg/policy"
+)
 
 // PolicySnapshot is the immutable, already-rendered Vault portion of a
 // policy-only candidate. It owns no publication or credential-source lifecycle.
@@ -48,12 +52,12 @@ func (v *Store) FreezeForPolicy(pol *policy.NetworkPolicy) (*PolicySnapshot, err
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 	if err := v.validateCandidate(v.credentials, v.bindings, pol); err != nil {
-		return nil, ErrInvalidCandidate
+		return nil, fmt.Errorf("%w: %v", ErrInvalidCandidate, err)
 	}
 	for _, binding := range v.bindings {
 		for _, host := range binding.Match.Hosts {
 			if !pol.AllowsEntireHostSelector(host) {
-				return nil, ErrInvalidCandidate
+				return nil, fmt.Errorf("binding %q host %q is not entirely allowed by egress policy: %w", binding.Name, host, ErrInvalidCandidate)
 			}
 		}
 	}
