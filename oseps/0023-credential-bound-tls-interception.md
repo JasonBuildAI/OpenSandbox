@@ -1163,6 +1163,49 @@ ordinary child restart or successful IPC readback cannot clear it. Shutdown and
 teardown remain available. There is no reset API; the first recovery reason is
 sticky only within the same Go process incarnation.
 
+For the ordinary sidecar's experimental revision runtime, recovery also
+synchronously quiesces the same nft Manager. Its terminal static-apply error
+sets a one-way frozen state under the Manager lock before returning, including
+the first startup apply; successful missing-table fallback does not freeze it.
+The option is set by the existing experimental switch at Manager construction,
+before startup enforcement. The recovery owner requires `Quiesce()` on its
+internal nft interface and calls it for policy persistence, nft apply and
+session-cleanup failures after publishing ticket invalidation and the sticky
+health restriction. Health probes do not acquire the policy or Manager lock,
+so they can return 503 while an admitted writer finishes. Lock order remains
+policy/Vault barrier, any already-held process-lifecycle lock, then Manager lock;
+the Manager does not call back into the owner.
+
+The lock-protected write-admission boundary covers static replacement,
+`AddResolvedIPs` and its locked helper, `AddResolvedDomain`, late
+`applyDomainRefresh` results, active TCP lease renewal, and
+`AddUpstreamProxyIPs`. A writer already holding the Manager lock may complete
+before quiescence takes effect. An in-flight DNS query may return later, but
+cannot write nft or republish old authorization tracking. Upstream proxy lease
+renewal also stops: DNS-learned addresses may expire and later proxy connections
+may fail. Existing traffic and established connections can still be permitted.
+Stale bootstrap tickets, clean child crashes and successful policy publication
+do not freeze the Manager. Legacy sidecar, Fast Sandbox and dns-only behavior
+keep their existing boundaries.
+
+Explicit shutdown `RemoveEnforcement` remains a table-deletion exception and
+does not unfreeze the Manager, even after failed cleanup. There is no reset or
+unfreeze API, packet fence, durable frozen state, rollback of unknown effects,
+or new hard shutdown deadline. Deterministic owner tests use real Manager write
+admission and injected effect failures to cover recovery sources and health
+while an admitted writer drains; these tests do not establish kernel behavior.
+
+`TestNftQuiescenceAfterCommittedStaticError` uses a separate Linux network
+namespace and the real nft runner. After seeding old dynamic and upstream
+addresses, it commits a new static ruleset and injects a result error only after
+nft succeeds. All six subsequent runtime paths must leave the committed policy
+and empty dynamic/upstream sets unchanged. The privileged egress CI explicitly
+selects this test and `TestDynamicElementRenewal` with
+`OPENSANDBOX_NFT_TEST=1`. Linux, nftables, `unshare`, and namespace/nft permissions
+are required; missing prerequisites fail enabled runs. Ordinary Go suite runs
+skip this kernel validation when it is not enabled. Neither a skip nor a setup
+failure establishes kernel behavior, and the test does not prove a packet fence.
+
 Deterministic lifecycle tests cover both readiness entry points, staged recovery
 transitions, exact cleanup and publication races. A real Go→Unix→Python test uses
 the production authenticated IPC endpoint and installation-only receiver to

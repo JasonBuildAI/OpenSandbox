@@ -43,10 +43,13 @@ const (
 type runner func(ctx context.Context, script string) ([]byte, error)
 
 type Options struct {
-	BlockDoT       bool
-	BlockDoH443    bool
-	DoHBlocklistV4 []string
-	DoHBlocklistV6 []string
+	// QuiesceOnApplyFailure freezes runtime writes on a terminal static error.
+	// Explicit Quiesce calls always take effect, regardless of this option.
+	QuiesceOnApplyFailure bool
+	BlockDoT              bool
+	BlockDoH443           bool
+	DoHBlocklistV4        []string
+	DoHBlocklistV6        []string
 	// ConnectionRefreshInterval controls how often active TCP connections renew
 	// DNS-derived nft leases. Shorter intervals reduce the maximum temporary
 	// reconnect gap, but increase /proc scans and nft updates. The 30-second
@@ -64,6 +67,7 @@ type Manager struct {
 	run          runner
 	opts         Options
 	mu           sync.Mutex
+	quiesced     bool
 	tracker      *connectionTracker
 	domainPolicy *policy.NetworkPolicy
 	domains      map[string]*resolvedDomain
@@ -94,16 +98,22 @@ func newManager(r runner, opts Options) *Manager {
 }
 
 func (m *Manager) ApplyStatic(ctx context.Context, p *policy.NetworkPolicy) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.quiesced {
+		return ErrQuiesced
+	}
 	if p == nil {
 		p = policy.DefaultDenyPolicy()
 	}
 	allowV4, allowV6, denyV4, denyV6 := p.StaticIPSets()
 	log.Infof("nftables: applying static policy: default=%s, allow_v4=%d, allow_v6=%d, deny_v4=%d, deny_v6=%d",
 		p.DefaultAction, len(allowV4), len(allowV6), len(denyV4), len(denyV6))
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	script, err := buildRuleset(p, m.opts)
 	if err != nil {
+		if m.opts.QuiesceOnApplyFailure {
+			m.quiesced = true
+		}
 		return err
 	}
 	if _, err := m.run(ctx, script); err != nil {
@@ -120,6 +130,11 @@ func (m *Manager) ApplyStatic(ctx context.Context, p *policy.NetworkPolicy) erro
 				}
 			}
 		}
+		// Keep the failure and freeze in the same critical section so queued
+		// writers cannot publish old permits before the owner receives it.
+		if m.opts.QuiesceOnApplyFailure {
+			m.quiesced = true
+		}
 		telemetry.RecordNftablesUpdateFailed(telemetry.NftOpStaticApply)
 		return err
 	}
@@ -133,16 +148,15 @@ func (m *Manager) ApplyStatic(ctx context.Context, p *policy.NetworkPolicy) erro
 }
 
 func (m *Manager) AddResolvedIPs(ctx context.Context, ips []ResolvedIP) error {
-	if len(ips) == 0 {
-		return nil
-	}
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.addResolvedIPsLocked(ctx, ips)
 }
 
 func (m *Manager) addResolvedIPsLocked(ctx context.Context, ips []ResolvedIP) error {
+	if m.quiesced {
+		return ErrQuiesced
+	}
 	script := buildAddResolvedIPsScript(tableName, ips)
 	if script == "" {
 		return nil
@@ -176,6 +190,7 @@ func (m *Manager) StartConnectionRefresh(ctx context.Context) {
 }
 
 // RemoveEnforcement drops inet opensandbox; missing table is not an error.
+// Shutdown may remove the table even when quiesced, but never unfreezes writes.
 func (m *Manager) RemoveEnforcement(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

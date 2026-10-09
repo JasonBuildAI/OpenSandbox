@@ -90,11 +90,14 @@ func (l *stagedTestAlwaysLoader) RefreshIfDueWithApply(_ time.Time, apply func(d
 type stubNft struct {
 	err         error
 	calls       int
+	quiesces    int
 	applied     *policy.NetworkPolicy
 	onApply     func(*policy.NetworkPolicy)
 	deadline    time.Time
 	hasDeadline bool
 }
+
+func (s *stubNft) Quiesce() { s.quiesces++ }
 
 func (s *stubNft) ApplyStatic(ctx context.Context, p *policy.NetworkPolicy) error {
 	s.calls++
@@ -790,9 +793,11 @@ func TestRevisionRecoveryPolicyEffectClassification(t *testing.T) {
 			if kind == "legacy-failure" {
 				require.Nil(t, s.revisionRecovery)
 				require.False(t, s.mitmGate.MitmPending())
+				require.Zero(t, nft.quiesces)
 				return
 			}
 			if wantRecovery {
+				require.Equal(t, 1, nft.quiesces)
 				require.True(t, s.mitmGate.MitmPending())
 				require.Equal(t, revisionRecoveryExternalEffectsUnknown, s.revisionRecovery.reason)
 				require.ErrorIs(t, validateRecoveryTicket(s, ticket), errRevisionRecoveryRequired)
@@ -813,6 +818,7 @@ func TestRevisionRecoveryPolicyEffectClassification(t *testing.T) {
 				require.Equal(t, calls, nft.calls)
 				require.True(t, s.mitmGate.MitmPending())
 			} else {
+				require.Zero(t, nft.quiesces)
 				require.Equal(t, revisionRecoveryNone, s.revisionRecovery.reason)
 				require.False(t, s.mitmGate.MitmPending())
 				if wantChanged {

@@ -27,7 +27,7 @@ Egress is how a sandbox gets a network policy instead of open internet access. I
 
 **Layer 2 — Network (`dns+nft` mode).** nftables drops everything not explicitly allowed. Allowed traffic passes by static rule or by DNS-learned address sets: a resolved IP receives a bounded lease (with a grace window for active TCP connections), so "allowed" never silently becomes "allowed forever". UDP and QUIC flows rely on DNS lease timing alone.
 
-**Precedence.** First matching rule wins, in this order: platform `deny.always`, platform `allow.always`, then your policy — so the platform's deny always beats your allow. The overlays live in files inside the sidecar image and hot-reload every minute. A reload publishes the parsed pair only after the corresponding nftables static policy is accepted; parse or apply failures keep the active in-memory rules and remain eligible for retry. Your policy is set per sandbox and can be mutated at runtime (add, replace, remove by target) through the API the SDKs expose.
+**Precedence.** First matching rule wins, in this order: platform `deny.always`, platform `allow.always`, then your policy — so the platform's deny always beats your allow. The overlays live in files inside the sidecar image and hot-reload every minute. A reload publishes the parsed pair only after the corresponding nftables static policy is accepted; parse or apply failures keep the active in-memory rules. Failures remain eligible for retry unless the experimental revision runtime requires recovery, as described below. Your policy is set per sandbox and can be mutated at runtime (add, replace, remove by target) through the API the SDKs expose.
 
 ## Design decisions
 
@@ -95,6 +95,47 @@ crashes, do not set this latch. Shutdown and teardown remain available. The firs
 recovery reason remains sticky for that Go process incarnation; successful
 readback, listener checks and ordinary child restarts cannot clear it. There is
 no reset API in this increment.
+
+In the ordinary sidecar's experimental revision runtime, entering recovery also
+synchronously freezes runtime writes in the same nft Manager. A terminal static
+apply error freezes that Manager before releasing its lock, starting with the
+first startup apply; a successful missing-table fallback remains a success and
+does not freeze it. Policy-file persistence and session-cleanup failures freeze
+it through the recovery owner. The owner publishes the health and bootstrap
+restrictions before waiting for an already admitted nft writer, so `/healthz`
+can return 503 while that writer drains. The write-admission boundary is the
+point where the frozen state is set under the Manager lock; an earlier admitted
+write may finish before that point.
+
+The freeze covers six runtime paths: static policy replacement (`ApplyStatic`),
+direct dynamic IP additions (`AddResolvedIPs` and its locked helper), DNS answer
+publication (`AddResolvedDomain`), late domain-refresh results
+(`applyDomainRefresh`), active TCP lease renewal, and upstream proxy address
+updates (`AddUpstreamProxyIPs`). DNS queries already in flight may complete,
+but their results cannot write rules or republish old authorization state.
+Stopping lease renewal can reduce workload availability; DNS-learned upstream
+proxy addresses can expire and cause later proxy connections to fail. Existing
+connections are not necessarily disconnected by the freeze.
+
+There is no unfreeze operation. Explicit shutdown `RemoveEnforcement` can still
+delete the nft table, whether cleanup succeeds or fails, and never clears the
+Manager's frozen state. This does not provide a packet fence: existing rules,
+leased addresses and established connections may still allow traffic, and
+teardown may remove enforcement. The freeze does not survive process restart,
+roll back unknown external effects, or add a hard shutdown deadline. Legacy
+sidecar and Fast Sandbox behavior are unchanged; dns-only recovery keeps its
+existing readiness behavior without requiring an nft Manager.
+
+Kernel write-admission validation uses
+`TestNftQuiescenceAfterCommittedStaticError` in a separate Linux network
+namespace. It commits a new ruleset through the real nft runner before injecting
+an error, then checks that all six runtime paths leave the new static policy and
+empty dynamic/upstream sets unchanged. It requires `nft`, `unshare`, and
+permissions to create a network namespace and operate nftables. The privileged
+egress CI explicitly selects it alongside `TestDynamicElementRenewal` with
+`OPENSANDBOX_NFT_TEST=1`; missing prerequisites fail the enabled tests. Ordinary
+Go tests skip kernel validation when that variable is unset, so their success
+does not establish kernel behavior or packet isolation.
 
 This state is in memory only. Readiness is not a network-traffic fence, and this
 increment provides no atomic policy-file/nft rollback, dynamic DNS-state recovery

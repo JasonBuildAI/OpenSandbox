@@ -164,6 +164,11 @@ func (s *policyServer) requireRevisionRecoveryLocked(reason revisionRecoveryReas
 	// Publish the sticky health restriction independently of optional MITM readiness.
 	s.revisionRecoveryRequired.Store(true)
 	s.mitmGate.SetReady(false)
+	// Health and ticket restrictions precede waiting for an admitted nft writer.
+	// Keep the one-way lock order s.mu -> Manager.mu; Quiesce never calls back.
+	if s.nft != nil {
+		s.nft.Quiesce()
+	}
 }
 
 func (s *policyServer) captureRevisionBootstrap(ctx context.Context) (credentialvault.ActiveSnapshot, int64, *revisionBootstrapTicket, error) {

@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"os"
 	"os/signal"
@@ -126,7 +127,7 @@ func main() {
 				}
 				addCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
-				if err := nftMgr.AddUpstreamProxyIPs(addCtx, ips); err != nil {
+				if err := nftMgr.AddUpstreamProxyIPs(addCtx, ips); err != nil && !errors.Is(err, nftables.ErrQuiesced) {
 					log.Warnf("upstream proxy: nft update for %q failed: %v", domain, err)
 				}
 			})

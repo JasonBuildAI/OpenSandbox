@@ -56,6 +56,7 @@ type alwaysRulesLoader interface {
 // nftApplier: static allow/deny sets plus dynamic DNS-learned entries; teardown on shutdown.
 type nftApplier interface {
 	ApplyStatic(context.Context, *policy.NetworkPolicy) error
+	Quiesce()
 	AddResolvedDomain(context.Context, string, []nftables.ResolvedIP) error
 	AddUpstreamProxyIPs(context.Context, []nftables.ResolvedIP) error
 	StartConnectionRefresh(context.Context)
