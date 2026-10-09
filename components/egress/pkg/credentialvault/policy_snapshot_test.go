@@ -258,6 +258,14 @@ func TestPolicySnapshotValidationErrorsRetainSafeContext(t *testing.T) {
 			rejected, err := store.FreezeForPolicy(proposed)
 			require.Nil(t, rejected)
 			require.ErrorIs(t, err, ErrInvalidCandidate)
+			if kind != "whole selector" {
+				wrapped, ok := err.(interface{ Unwrap() []error })
+				require.True(t, ok, "preserve both candidate sentinel and validation cause")
+				causes := wrapped.Unwrap()
+				require.Len(t, causes, 2)
+				require.ErrorIs(t, err, causes[1])
+				require.NotEqual(t, ErrInvalidCandidate, causes[1])
+			}
 			for _, fragment := range wanted {
 				require.Contains(t, err.Error(), fragment)
 			}

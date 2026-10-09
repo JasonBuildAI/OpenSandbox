@@ -52,7 +52,7 @@ func (v *Store) FreezeForPolicy(pol *policy.NetworkPolicy) (*PolicySnapshot, err
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 	if err := v.validateCandidate(v.credentials, v.bindings, pol); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidCandidate, err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalidCandidate, err)
 	}
 	for _, binding := range v.bindings {
 		for _, host := range binding.Match.Hosts {

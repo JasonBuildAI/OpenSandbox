@@ -18,9 +18,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/alibaba/opensandbox/egress/pkg/credentialvault"
@@ -260,4 +262,146 @@ func TestEffectivePolicyCandidatePreparePropagatesValidationContext(t *testing.T
 		require.NoError(t, snapshotErr)
 		require.Equal(t, snapshot, active)
 	}
+}
+
+func TestEffectivePolicyInputDiagnostics(t *testing.T) {
+	inputs := policyCandidateInputs(t)
+	var resolves atomic.Int32
+	registry := credentialvault.NewSourceRegistry()
+	registry.Register("diagnostic", func(json.RawMessage) (credentialvault.CredentialSource, error) {
+		return &diagnosticCredentialSource{calls: &resolves}, nil
+	})
+	store := credentialvault.NewStoreWithRegistry(nil, nil, registry)
+	request := integrationVaultRequest("private-policy-candidate")
+	request.Credentials[0].Source = json.RawMessage(`{"type":"diagnostic"}`)
+	mutation, err := store.PrepareCreate(request, inputs.user)
+	require.NoError(t, err)
+	_, err = mutation.ActiveSnapshot(context.Background())
+	require.NoError(t, err)
+	_, err = store.CommitCandidate(mutation)
+	require.NoError(t, err)
+	base, err := newEffectivePolicyBase(inputs, 4)
+	require.NoError(t, err)
+	valid, err := base.Prepare(store, inputs)
+	require.NoError(t, err)
+	state, err := store.Sanitized()
+	require.NoError(t, err)
+	snapshot, err := store.ActiveSnapshot()
+	require.NoError(t, err)
+	cases := []struct {
+		name      string
+		mutate    func(*effectivePolicyInputs)
+		fragments []string
+		cause     bool
+	}{
+		{"user action", func(in *effectivePolicyInputs) {
+			in.user.Egress[0].Action = "invalid"
+			in.user.Egress[0].Target = "raw-target-private.example.com"
+		}, []string{"parse user policy", `unsupported action "invalid"`}, true},
+		{"user empty target", func(in *effectivePolicyInputs) { in.user.Egress[0].Target = "" }, []string{"parse user policy", "egress target cannot be empty"}, true},
+		{"user default", func(in *effectivePolicyInputs) { in.user.DefaultAction = "invalid" }, []string{"user policy", `unsupported default action "invalid"`}, false},
+	}
+	for _, list := range []string{"alwaysDeny", "alwaysAllow", "telemetryAllow"} {
+		for _, failure := range []string{"parse action", "empty target", "wrong action"} {
+			list, failure := list, failure
+			expected := "allow"
+			if list == "alwaysDeny" {
+				expected = "deny"
+			}
+			fragments := []string{list, "rule 1"}
+			switch failure {
+			case "parse action":
+				fragments = append(fragments, `unsupported action "invalid"`)
+			case "empty target":
+				fragments = append(fragments, "egress target cannot be empty")
+			case "wrong action":
+				fragments = append(fragments, "action", `want "`+expected+`"`)
+			}
+			cases = append(cases, struct {
+				name      string
+				mutate    func(*effectivePolicyInputs)
+				fragments []string
+				cause     bool
+			}{list + " " + failure, func(in *effectivePolicyInputs) {
+				rules := []policy.EgressRule{{Action: expected, Target: "first.example.com"}, {Action: expected, Target: "raw-target-private.example.com"}}
+				switch failure {
+				case "parse action":
+					rules[1].Action = "invalid"
+				case "empty target":
+					rules[1].Target = ""
+				case "wrong action":
+					if expected == "allow" {
+						rules[1].Action = "deny"
+					} else {
+						rules[1].Action = "allow"
+					}
+				}
+				switch list {
+				case "alwaysDeny":
+					in.alwaysDeny = rules
+				case "alwaysAllow":
+					in.alwaysAllow = rules
+				case "telemetryAllow":
+					in.telemetryAllow = rules
+				}
+			}, fragments, failure != "wrong action"})
+		}
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			next := policyCandidateInputs(t)
+			tc.mutate(&next)
+			rejected, err := base.Prepare(store, next)
+			require.Nil(t, rejected)
+			require.ErrorIs(t, err, errInvalidEffectivePolicyCandidate)
+			for _, part := range tc.fragments {
+				require.Contains(t, err.Error(), part)
+			}
+			require.NotContains(t, err.Error(), "raw-target-private.example.com")
+			require.NotContains(t, err.Error(), "private-policy-candidate")
+			if tc.cause {
+				wrapped, ok := err.(interface{ Unwrap() []error })
+				require.True(t, ok)
+				causes := wrapped.Unwrap()
+				require.Len(t, causes, 2)
+				require.ErrorIs(t, err, causes[1])
+				require.NotEqual(t, errInvalidEffectivePolicyCandidate, causes[1])
+			}
+			require.NoError(t, base.Validate(store, valid))
+			require.Equal(t, int64(4), base.epoch)
+			after, e := store.Sanitized()
+			require.NoError(t, e)
+			require.Equal(t, state, after)
+			active, e := store.ActiveSnapshot()
+			require.NoError(t, e)
+			require.Equal(t, snapshot, active)
+			require.Equal(t, int32(1), resolves.Load(), "rejected policy input must not resolve credentials")
+		})
+	}
+}
+
+func TestMarshalEffectivePolicySnapshotDiagnostics(t *testing.T) {
+	invalid := credentialvault.ActiveSnapshot{Revision: -1, Redactions: []string{"private-snapshot-secret"}}
+	payload, err := marshalEffectivePolicySnapshot(invalid, 4)
+	require.Nil(t, payload)
+	require.ErrorIs(t, err, errInvalidEffectivePolicyCandidate)
+	require.ErrorIs(t, err, credentialvault.ErrInvalidDecisionSnapshot)
+	require.Contains(t, err.Error(), "marshal decision snapshot")
+	require.NotContains(t, err.Error(), "private-snapshot-secret")
+	require.NotContains(t, err.Error(), "redactions")
+	snapshot := credentialvault.ActiveSnapshot{}
+	got, err := marshalEffectivePolicySnapshot(snapshot, 4)
+	require.NoError(t, err)
+	expected, err := credentialvault.MarshalDecisionSnapshot(snapshot, 4)
+	require.NoError(t, err)
+	require.Equal(t, expected, got)
+}
+
+// A real registry source counts resolution without a mutable production seam.
+type diagnosticCredentialSource struct{ calls *atomic.Int32 }
+
+func (*diagnosticCredentialSource) Type() string { return "diagnostic" }
+func (s *diagnosticCredentialSource) Resolve(context.Context) (string, error) {
+	s.calls.Add(1)
+	return "private-policy-candidate", nil
 }

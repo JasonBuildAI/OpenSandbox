@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 
 	"github.com/alibaba/opensandbox/egress/pkg/credentialvault"
@@ -100,9 +101,9 @@ func (b *effectivePolicyBase) Prepare(store *credentialvault.Store, next effecti
 		return nil, err
 	}
 	epoch := b.epoch + 1
-	payload, err := credentialvault.MarshalDecisionSnapshot(vault.Snapshot(), epoch)
+	payload, err := marshalEffectivePolicySnapshot(vault.Snapshot(), epoch)
 	if err != nil {
-		return nil, errInvalidEffectivePolicyCandidate
+		return nil, err
 	}
 	digest := sha256.Sum256(payload)
 	return &effectivePolicyCandidate{base: b, store: store, vault: vault, inputs: frozen, effective: effective, epoch: epoch, payload: payload, digest: hex.EncodeToString(digest[:])}, nil
@@ -160,31 +161,47 @@ func freezeEffectivePolicyInputs(inputs effectivePolicyInputs) (effectivePolicyI
 		return effectivePolicyInputs{}, errInvalidEffectivePolicyCandidate
 	}
 	user, err := policy.ParsePolicy(string(raw))
-	if err != nil || (user.DefaultAction != policy.ActionAllow && user.DefaultAction != policy.ActionDeny) {
-		return effectivePolicyInputs{}, errInvalidEffectivePolicyCandidate
+	if err != nil {
+		return effectivePolicyInputs{}, fmt.Errorf("%w: parse user policy: %w", errInvalidEffectivePolicyCandidate, err)
 	}
-	freezeRules := func(rules []policy.EgressRule, action string) ([]policy.EgressRule, error) {
+	if user.DefaultAction != policy.ActionAllow && user.DefaultAction != policy.ActionDeny {
+		return effectivePolicyInputs{}, fmt.Errorf("%w: user policy: unsupported default action %q", errInvalidEffectivePolicyCandidate, user.DefaultAction)
+	}
+	freezeRules := func(name string, rules []policy.EgressRule, action string) ([]policy.EgressRule, error) {
 		out := make([]policy.EgressRule, len(rules))
 		for i, rule := range rules {
 			parsed, err := policy.ParseValidatedEgressRule(rule.Action, rule.Target)
-			if err != nil || parsed.Action != action {
-				return nil, errInvalidEffectivePolicyCandidate
+			if err != nil {
+				return nil, fmt.Errorf("%w: %s rule %d: %w", errInvalidEffectivePolicyCandidate, name, i, err)
+			}
+			if parsed.Action != action {
+				return nil, fmt.Errorf("%w: %s rule %d: action %q, want %q", errInvalidEffectivePolicyCandidate, name, i, parsed.Action, action)
 			}
 			out[i] = parsed
 		}
 		return out, nil
 	}
-	deny, err := freezeRules(inputs.alwaysDeny, policy.ActionDeny)
+	deny, err := freezeRules("alwaysDeny", inputs.alwaysDeny, policy.ActionDeny)
 	if err != nil {
 		return effectivePolicyInputs{}, err
 	}
-	allow, err := freezeRules(inputs.alwaysAllow, policy.ActionAllow)
+	allow, err := freezeRules("alwaysAllow", inputs.alwaysAllow, policy.ActionAllow)
 	if err != nil {
 		return effectivePolicyInputs{}, err
 	}
-	telemetry, err := freezeRules(inputs.telemetryAllow, policy.ActionAllow)
+	telemetry, err := freezeRules("telemetryAllow", inputs.telemetryAllow, policy.ActionAllow)
 	if err != nil {
 		return effectivePolicyInputs{}, err
 	}
 	return effectivePolicyInputs{user: user, alwaysDeny: deny, alwaysAllow: allow, telemetryAllow: telemetry}, nil
+}
+
+// marshalEffectivePolicySnapshot preserves the fixed validation sentinel and
+// stage without adding credential-bearing snapshot or payload diagnostics.
+func marshalEffectivePolicySnapshot(snapshot credentialvault.ActiveSnapshot, epoch int64) ([]byte, error) {
+	payload, err := credentialvault.MarshalDecisionSnapshot(snapshot, epoch)
+	if err != nil {
+		return nil, fmt.Errorf("%w: marshal decision snapshot: %w", errInvalidEffectivePolicyCandidate, err)
+	}
+	return payload, nil
 }
