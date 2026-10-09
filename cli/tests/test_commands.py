@@ -46,6 +46,7 @@ from opensandbox.models.templates import (
     TemplateStatus,
 )
 
+from opensandbox_cli.config import load_config_file
 from opensandbox_cli.main import cli
 from opensandbox_cli.output import OutputFormatter
 
@@ -183,6 +184,90 @@ class TestConfigSet:
         )
         assert result.exit_code != 0
         assert "Run 'osb config init' first." in result.output
+
+    def test_set_escapes_special_characters(self, runner: CliRunner, tmp_path: Path) -> None:
+        cfg_path = tmp_path / "config.toml"
+        cfg_path.write_text("[connection]\n")
+
+        result = runner.invoke(
+            cli,
+            ["--config", str(cfg_path), "config", "set", "connection.domain", 'a"b\\c'],
+        )
+
+        assert result.exit_code == 0
+        parsed = load_config_file(cfg_path)
+        assert parsed["connection"]["domain"] == 'a"b\\c'
+
+    def test_set_preserves_comments_and_unrelated_sections(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        cfg_path = tmp_path / "config.toml"
+        cfg_path.write_text(
+            "# top comment\n"
+            "[connection]\n"
+            "# keep this note\n"
+            'api_key = "k"\n\n'
+            "[output]\n"
+            "color = true\n"
+        )
+
+        result = runner.invoke(
+            cli,
+            ["--config", str(cfg_path), "config", "set", "connection.domain", "team.host"],
+        )
+
+        assert result.exit_code == 0
+        text = cfg_path.read_text()
+        assert "# top comment" in text
+        assert "# keep this note" in text
+        parsed = load_config_file(cfg_path)
+        assert parsed["connection"]["api_key"] == "k"
+        assert parsed["connection"]["domain"] == "team.host"
+        assert parsed["output"]["color"] is True
+
+    def test_set_creates_missing_section(self, runner: CliRunner, tmp_path: Path) -> None:
+        cfg_path = tmp_path / "config.toml"
+        cfg_path.write_text("[connection]\n")
+
+        result = runner.invoke(
+            cli,
+            ["--config", str(cfg_path), "config", "set", "defaults.image", "python:3.12"],
+        )
+
+        assert result.exit_code == 0
+        parsed = load_config_file(cfg_path)
+        assert parsed["defaults"]["image"] == "python:3.12"
+
+    def test_set_infers_scalar_types(self, runner: CliRunner, tmp_path: Path) -> None:
+        cfg_path = tmp_path / "config.toml"
+        cfg_path.write_text("[connection]\n")
+
+        runner.invoke(
+            cli,
+            ["--config", str(cfg_path), "config", "set", "connection.request_timeout", "45"],
+        )
+        runner.invoke(
+            cli,
+            ["--config", str(cfg_path), "config", "set", "connection.use_server_proxy", "true"],
+        )
+
+        parsed = load_config_file(cfg_path)
+        assert parsed["connection"]["request_timeout"] == 45
+        assert parsed["connection"]["use_server_proxy"] is True
+
+    def test_set_reports_invalid_existing_toml(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        cfg_path = tmp_path / "config.toml"
+        cfg_path.write_text("[connection\nbroken =")
+
+        result = runner.invoke(
+            cli,
+            ["--config", str(cfg_path), "config", "set", "connection.domain", "team.host"],
+        )
+
+        assert result.exit_code != 0
+        assert "not valid TOML" in result.output
 
 
 # Sandbox commands
