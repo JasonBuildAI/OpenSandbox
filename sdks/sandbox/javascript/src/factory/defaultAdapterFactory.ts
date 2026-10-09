@@ -38,7 +38,19 @@ import type {
 
 const API_KEY_HEADER = "OPEN-SANDBOX-API-KEY";
 
-function createDataPlaneHeaders(
+/**
+ * Builds headers for a data-plane request (execd or egress).
+ *
+ * The tenant API key is attached only in server-proxy mode: direct requests go
+ * straight to the sandbox, which performs no authentication, so the key must
+ * never travel into it. A credential minted for a specific endpoint wins over
+ * the connection-level key.
+ *
+ * Exported through the internal entrypoint so companion SDKs that build their
+ * own data-plane clients (for example the code interpreter) share this policy
+ * instead of re-implementing it.
+ */
+export function createDataPlaneHeaders(
   connectionHeaders: Record<string, string>,
   endpointHeaders: Record<string, string> | undefined,
   useServerProxy: boolean,
