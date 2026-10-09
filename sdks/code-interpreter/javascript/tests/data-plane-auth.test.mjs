@@ -42,7 +42,7 @@ function createConfig(useServerProxy, requests, includeExplicitApiKey = false) {
 
   const headers = { "x-custom-header": "custom-value" };
   if (includeExplicitApiKey) {
-    headers[API_KEY_HEADER] = "explicit-secret";
+    headers["OPEN-SANDBOX-API-KEY"] = "explicit-secret";
   }
 
   const config = new ConnectionConfig({
@@ -56,12 +56,16 @@ function createConfig(useServerProxy, requests, includeExplicitApiKey = false) {
   return config;
 }
 
-async function sendCodeRequests(useServerProxy, useEndpointApiKey = false) {
+async function sendCodeRequests(
+  useServerProxy,
+  useEndpointApiKey = false,
+  useExplicitConnectionApiKey = false,
+) {
   const requests = [];
   const connectionConfig = createConfig(
     useServerProxy,
     requests,
-    !useServerProxy,
+    !useServerProxy || useExplicitConnectionApiKey,
   );
   const factory = new DefaultAdapterFactory();
   const codes = factory.createCodes({
@@ -104,5 +108,14 @@ test("server-proxied code requests preserve endpoint-specific API keys", async (
   assert.equal(requests.length, 2);
   for (const request of requests) {
     assert.equal(request.headers.get(API_KEY_HEADER), "endpoint-secret");
+  }
+});
+
+test("server-proxied code requests keep an explicitly configured API key", async () => {
+  const requests = await sendCodeRequests(true, false, true);
+
+  assert.equal(requests.length, 2);
+  for (const request of requests) {
+    assert.equal(request.headers.get(API_KEY_HEADER), "explicit-secret");
   }
 });

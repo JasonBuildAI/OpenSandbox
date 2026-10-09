@@ -53,12 +53,23 @@ public class DataPlaneAuthTests
         Assert.Equal("endpoint-secret", options.ExecdHeaders[ApiKeyHeader]);
     }
 
+    [Fact]
+    public async Task CreateAsync_ServerProxyMode_KeepsExplicitConnectionApiKey()
+    {
+        var options = await CaptureCodesOptionsAsync(
+            useServerProxy: true,
+            connectionHeaders: new Dictionary<string, string> { [ApiKeyHeader] = "explicit-secret" });
+
+        Assert.Equal("explicit-secret", options.ExecdHeaders[ApiKeyHeader]);
+    }
+
     private static async Task<CreateCodesStackOptions> CaptureCodesOptionsAsync(
         bool useServerProxy,
-        IReadOnlyDictionary<string, string>? endpointHeaders = null)
+        IReadOnlyDictionary<string, string>? endpointHeaders = null,
+        IReadOnlyDictionary<string, string>? connectionHeaders = null)
     {
         var captured = new CapturingAdapterFactory();
-        var sandbox = await CreateSandboxAsync(useServerProxy, endpointHeaders);
+        var sandbox = await CreateSandboxAsync(useServerProxy, endpointHeaders, connectionHeaders);
         await CodeInterpreter.CreateAsync(sandbox, new CodeInterpreterCreateOptions
         {
             AdapterFactory = captured,
@@ -72,7 +83,8 @@ public class DataPlaneAuthTests
 
     private static async Task<Sandbox> CreateSandboxAsync(
         bool useServerProxy,
-        IReadOnlyDictionary<string, string>? endpointHeaders)
+        IReadOnlyDictionary<string, string>? endpointHeaders,
+        IReadOnlyDictionary<string, string>? connectionHeaders)
     {
         var sandboxesMock = new Mock<ISandboxes>();
         sandboxesMock
@@ -120,7 +132,10 @@ public class DataPlaneAuthTests
             {
                 Domain = "localhost:8080",
                 ApiKey = "tenant-secret",
-                UseServerProxy = useServerProxy
+                UseServerProxy = useServerProxy,
+                Headers = connectionHeaders is null
+                    ? null
+                    : new Dictionary<string, string>(connectionHeaders)
             }),
             AdapterFactory = adapterFactoryMock.Object,
             SkipHealthCheck = true
