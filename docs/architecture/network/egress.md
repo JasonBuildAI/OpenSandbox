@@ -80,7 +80,11 @@ Snapshot installation or listener availability alone cannot make health ready.
 Policy or always-rule publication, including replacement with identical rules,
 and Vault changes invalidate an older capture. A rejected attempt stops and reaps
 only its own child before closing its session; a clean restart can capture fresh
-state and recover.
+state and recover. Initial startup also retries a stale publication with a fresh
+capture, up to three total launch attempts, so an immediate always-rule reload
+can settle without forcing the sidecar to exit. Redirect and CA preparation run
+once. Other startup errors, cancellation, shutdown, and recovery-required state
+stop startup; exhausting the stale-attempt limit leaves health not-ready.
 
 If experimental policy processing attempts a policy-file or nft update and then
 fails with an uncertain outcome, or session cleanup cannot be confirmed, the Go

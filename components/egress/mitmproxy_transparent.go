@@ -300,21 +300,39 @@ func (m *mitmTransparent) launchAndListen(ctx context.Context, deps mitmLaunchDe
 // checkpoint used by restart. Publication uses the live caller context, not the
 // now-cancelled launch/listen timeout context.
 func (m *mitmTransparent) startInitial(ctx context.Context, deps mitmLaunchDependencies, prepare func() error) error {
-	result, err := m.launchAndListen(ctx, deps)
-	if err != nil {
-		return err
-	}
-	if err = prepare(); err == nil {
+	// The always-rule reload starts before MITM and can invalidate a clean
+	// capture. Bound retries below restartCh's capacity: the watcher starts only
+	// after initial startup, so rejected children leave queued exit events.
+	const maxAttempts = 3
+	prepared := false
+	for attempt := 1; ; attempt++ {
+		result, err := m.launchAndListen(ctx, deps)
+		if err != nil {
+			return err
+		}
+		if !prepared {
+			if err := prepare(); err != nil {
+				m.cleanupLaunch(result)
+				return err
+			}
+			// Redirect installation appends rules; never repeat its side effects.
+			prepared = true
+		}
 		if m.revisionOwner != nil && m.revisionOwner.server != nil {
 			err = publishRevisionReady(ctx, m, result)
 		} else if !m.publishRunning(result.running, result.session, result.generation) {
 			err = revision.ErrClosed
 		}
-	}
-	if err != nil {
+		if err == nil {
+			return nil
+		}
 		m.cleanupLaunch(result)
+		if !errors.Is(err, errStaleRevisionBootstrap) || attempt == maxAttempts {
+			return err
+		}
+		// The next launch recaptures only after cleanup and rechecks shutdown,
+		// cancellation, and sticky recovery before creating another session.
 	}
-	return err
 }
 
 // startMitmproxyTransparentIfEnabled starts mitmdump in transparent mode, waits for the listener, and installs OUTPUT REDIRECT, then syncs the CA.
