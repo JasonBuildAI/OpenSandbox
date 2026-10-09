@@ -269,6 +269,60 @@ class TestConfigSet:
         assert result.exit_code != 0
         assert "not valid TOML" in result.output
 
+    def test_set_rejects_nested_key(self, runner: CliRunner, tmp_path: Path) -> None:
+        cfg_path = tmp_path / "config.toml"
+        cfg_path.write_text("[connection]\n")
+
+        result = runner.invoke(
+            cli,
+            ["--config", str(cfg_path), "config", "set", "connection.retry.count", "3"],
+        )
+
+        assert result.exit_code != 0
+        assert "section.field" in result.output
+        # The value must not be silently misfiled as a quoted literal key.
+        assert load_config_file(cfg_path) == {"connection": {}}
+
+    def test_set_handles_out_of_order_tables(self, runner: CliRunner, tmp_path: Path) -> None:
+        cfg_path = tmp_path / "config.toml"
+        cfg_path.write_text(
+            "[connection]\n"
+            'domain = "old"\n\n'
+            "[output]\n"
+            "color = true\n\n"
+            "[connection.retry]\n"
+            "count = 3\n",
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            cli,
+            ["--config", str(cfg_path), "config", "set", "connection.domain", "team.host"],
+        )
+
+        assert result.exit_code == 0
+        parsed = load_config_file(cfg_path)
+        assert parsed["connection"]["domain"] == "team.host"
+        assert parsed["connection"]["retry"]["count"] == 3
+        assert parsed["output"]["color"] is True
+
+    def test_set_preserves_non_ascii_config(self, runner: CliRunner, tmp_path: Path) -> None:
+        cfg_path = tmp_path / "config.toml"
+        cfg_path.write_text(
+            "# café comment\n[connection]\ndomain = \"old\"\n",
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            cli,
+            ["--config", str(cfg_path), "config", "set", "connection.domain", "team.host"],
+        )
+
+        assert result.exit_code == 0
+        # Reads and writes must stay UTF-8 regardless of the platform locale.
+        assert "café comment" in cfg_path.read_text(encoding="utf-8")
+        assert load_config_file(cfg_path)["connection"]["domain"] == "team.host"
+
 
 # Sandbox commands
 

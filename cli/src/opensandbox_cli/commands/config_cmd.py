@@ -21,6 +21,7 @@ from typing import Any
 
 import click
 import tomlkit
+from tomlkit.container import OutOfOrderTableProxy
 from tomlkit.exceptions import ParseError
 from tomlkit.items import InlineTable, Table
 
@@ -146,13 +147,13 @@ def config_set(
         raise click.ClickException(f"Config file not found: {path}. Run 'osb config init' first.")
 
     section, _, field = key.partition(".")
-    if not section or not field:
+    if not section or not field or "." in field:
         raise click.ClickException(
             "Key must be in 'section.field' format (e.g. connection.domain)."
         )
 
     try:
-        document = tomlkit.parse(path.read_text())
+        document = tomlkit.parse(path.read_text(encoding="utf-8"))
     except ParseError as exc:
         raise click.ClickException(
             f"Config file is not valid TOML ({path}): {exc}"
@@ -162,10 +163,10 @@ def config_set(
     if table is None:
         table = tomlkit.table()
         document[section] = table
-    if not isinstance(table, (Table, InlineTable)):
+    if not isinstance(table, (Table, InlineTable, OutOfOrderTableProxy)):
         raise click.ClickException(f"Cannot set {key}: '{section}' is not a TOML table.")
 
     table[field] = _parse_toml_value(value)
-    path.write_text(tomlkit.dumps(document))
+    path.write_text(tomlkit.dumps(document), encoding="utf-8")
 
     obj.output.success(f"Set {key} = {value}")
