@@ -179,7 +179,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("mitmproxy transparent: %v", err)
 	}
-	mitmGate.MarkStackReady()
+	if !constants.IsTruthy(os.Getenv(constants.EnvExperimentalRevisionRuntime)) {
+		mitmGate.MarkStackReady()
+	}
 	if mitm != nil {
 		mitm.watchMitmproxy(ctx, mitmGate)
 	}

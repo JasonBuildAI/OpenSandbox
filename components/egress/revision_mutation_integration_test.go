@@ -176,7 +176,10 @@ func revisionIntegrationLaunch(t *testing.T, s *policyServer) (*mitmTransparent,
 			}
 			return &revisionObservedSession{revisionProcessSession: session}, nil
 		},
-		snapshot: s.revisionBootstrapSnapshot,
+		snapshot: func(ctx context.Context) (credentialvault.ActiveSnapshot, int64, *revisionBootstrapTicket, error) {
+			snapshot, epoch, err := s.revisionBootstrapSnapshot(ctx)
+			return snapshot, epoch, nil, err
+		},
 		stop: func(r *mitmproxy.Running) {
 			assert.Same(t, child.running, r)
 			child.stop()
@@ -185,11 +188,12 @@ func revisionIntegrationLaunch(t *testing.T, s *policyServer) (*mitmTransparent,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	running, session, err := owner.launch(ctx, mitmproxy.Config{}, func(cfg mitmproxy.Config) (*mitmproxy.Running, error) {
+	result, err := owner.launch(ctx, mitmproxy.Config{}, func(cfg mitmproxy.Config) (*mitmproxy.Running, error) {
 		child = launchRevisionIPCChild(t, cfg)
 		return child.running, nil
 	})
 	require.NoError(t, err)
+	running, session := result.running, result.session
 	config, err := session.MitmproxyConfig()
 	require.NoError(t, err)
 	t.Cleanup(func() { child.stop(); require.NoError(t, session.Close()) })

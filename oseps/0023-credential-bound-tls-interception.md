@@ -3,7 +3,7 @@ title: Credential-Bound TLS Interception
 authors:
   - "@hpliStartAgain"
 creation-date: 2026-09-04
-last-updated: 2026-09-30
+last-updated: 2026-10-09
 status: implementing
 ---
 
@@ -1127,7 +1127,58 @@ be supplied when validating a candidate under the shared mutation barrier.
 Replacing the base handle invalidates older candidates even if policy content
 and epoch repeat; the Store's private mutation identity rejects Vault changes,
 including absent/create/delete and delete/recreate public-revision ABA.
-This foundation does not track the live current base or publish policy epochs.
+The experimental sidecar now tracks the live current base through a shared
+recovery/readiness owner, described below. Active policy epochs remain zero;
+policy-only candidate installation does not publish an active policy epoch.
+
+The recovery/readiness owner holds the authoritative immutable effective-policy
+base, Store identity, a private non-reusable bootstrap invalidation identity and
+a sticky recovery reason under the shared policy/Vault barrier. Capturing a
+bootstrap ticket freezes the already-rendered Vault snapshot without resolving
+credential sources again. The ticket is private, is not sent over IPC, and does
+not use the decision digest as proof of complete policy identity. Replacing the
+base invalidates prior candidates and bootstraps even if rules and epoch repeat;
+Vault mutation identity also rejects public-revision ABA.
+
+Initial startup and automatic child restart share one protected publication
+step, taking the policy barrier before the process-lifecycle lock. Slow launch,
+bootstrap IPC and listener checks run outside these locks. The final step checks
+the exact ticket, current base/Store/Vault identity, recovery state, caller
+cancellation, shutdown and exact pending child/session generation before
+transferring ownership and setting health ready. Successful installation and
+listener availability alone do not permit publication. Rejected attempts retain
+their own resources for exact child stop/reap followed by session close; an old
+exit notification cannot detach a newer generation. A clean child crash still
+allows a fresh capture and automatic restart.
+
+Experimental policy and always-rule paths invalidate in-flight bootstrap tickets
+before attempting external effects, then replace the authoritative base on
+successful legacy publication. They use explicitly frozen loader/telemetry
+inputs and do not turn policy success responses into revision transaction ACKs.
+An uncertain failure after an attempted policy-file or nft effect, or an
+unconfirmed session cleanup, latches `recovery-required`. Pure parse/validation
+failures before effects do not. Once latched, health remains not-ready, internal
+policy candidate preparation and Vault mutation ownership reject work, and
+ordinary child restart or successful IPC readback cannot clear it. Shutdown and
+teardown remain available. There is no reset API; the first recovery reason is
+sticky only within the same Go process incarnation.
+
+Deterministic lifecycle tests cover both readiness entry points, staged recovery
+transitions, exact cleanup and publication races. A real Go→Unix→Python test uses
+the production authenticated IPC endpoint and installation-only receiver to
+pause after installation and reject publication after a policy-base change,
+Vault ABA or recovery latch, with clean recapture and sticky-state controls. That
+test requires permission to create Unix sockets: a setup failure is a test
+failure, not evidence that stale-publication assertions ran. The child stop seam
+signals and reaps a real subprocess; it does not exercise the production
+mitmdump launcher, listener, `GracefulShutdown`, TLS or transport drain.
+
+The latch is neither a network fence nor durable recovery intent. This increment
+does not provide atomic policy-file/nft rollback, restore dynamic DNS state, or
+survive a whole Go/sidecar crash. Restarting the entire sidecar loses the latch
+and is not a proven safe recovery procedure. External effects transactions,
+durable intent, active policy epochs, public mutation ACKs, selective TLS,
+request hooks, live admissions and Fast Sandbox integration remain future work.
 
 Preparation revalidates every Vault binding, including HTTP-only bindings, and
 adds a conservative ordered whole-selector coverage proof for wildcard hosts.

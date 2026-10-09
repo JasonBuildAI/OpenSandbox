@@ -70,6 +70,33 @@ internal Go transaction owner now coordinates candidate installation and local
 Vault finalization, including fail-closed cleanup of the exact process generation
 on unresolved outcomes. It is not connected to these HTTP handlers and does not
 change the gate or provide transport-drain acknowledgement.
+
+The experimental lifecycle also keeps an authoritative policy base and a
+private bootstrap ticket under the shared policy/Vault barrier. Initial startup
+and automatic child restart use the same final check: the captured policy base,
+Store and Vault mutation identity must still be current, the exact child/session
+must still belong to the pending attempt, and recovery must not be required.
+Snapshot installation or listener availability alone cannot make health ready.
+Policy or always-rule publication, including replacement with identical rules,
+and Vault changes invalidate an older capture. A rejected attempt stops and reaps
+only its own child before closing its session; a clean restart can capture fresh
+state and recover.
+
+If experimental policy processing attempts a policy-file or nft update and then
+fails with an uncertain outcome, or session cleanup cannot be confirmed, the Go
+owner latches `recovery-required`. Health stays not-ready, and internal candidate
+preparation, Vault mutation ownership and new bootstrap publication are blocked.
+Parsing or validation errors before external effects, and ordinary clean child
+crashes, do not set this latch. Shutdown and teardown remain available. The first
+recovery reason remains sticky for that Go process incarnation; successful
+readback, listener checks and ordinary child restarts cannot clear it. There is
+no reset API in this increment.
+
+This state is in memory only. Readiness is not a network-traffic fence, and this
+increment provides no atomic policy-file/nft rollback, dynamic DNS-state recovery
+or whole-process crash durability. Restarting the entire sidecar loses the latch
+and is not a verified safe recovery procedure. Active policy epochs remain zero;
+legacy policy success responses are not revision transaction acknowledgements.
 :::
 
 **Trust is delivered, not disabled.** The sidecar exports its CA, and the sandbox bootstrap installs it into the system, NSS, and JDK trust stores on a best-effort basis — clients keep certificate verification on (`curl` without `-k`), and traffic stays encrypted end-to-end from the sandbox's point of view. Images that run Chromium-family browsers should ship the native `certutil` package so the per-user NSS store can be updated.

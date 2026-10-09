@@ -530,3 +530,75 @@ func TestRevisionVaultMutationSanitizesCandidateAndSessionFailures(t *testing.T)
 		})
 	}
 }
+
+func TestRevisionRecoveryMutationBlocked(t *testing.T) {
+	s, m, session := mutationFixture(t)
+	s.mu.Lock()
+	require.NoError(t, s.initRevisionRecoveryLocked(effectivePolicyInputs{user: policy.DefaultDenyPolicy()}))
+	s.requireRevisionRecoveryLocked(revisionRecoveryExternalEffectsUnknown)
+	s.mu.Unlock()
+	prepared := false
+	_, err := s.mutateRevisionVault(mutationContext(t), m, func(*credentialvault.Store, *policy.NetworkPolicy) (*credentialvault.MutationCandidate, error) {
+		prepared = true
+		return nil, nil
+	})
+	require.ErrorIs(t, err, errRevisionRecoveryRequired)
+	require.False(t, prepared)
+	require.Zero(t, session.updateCalls)
+	require.Zero(t, session.closeCalls)
+	require.NotNil(t, m.running)
+	require.True(t, s.mitmGate.MitmPending())
+}
+
+func TestRevisionRecoveryCleanupFailure(t *testing.T) {
+	for _, kind := range []string{"clean", "cleanup-failed", "legacy-cleanup-failed"} {
+		t.Run(kind, func(t *testing.T) {
+			s, m, session := mutationFixture(t)
+			if kind != "legacy-cleanup-failed" {
+				s.mu.Lock()
+				err := s.initRevisionRecoveryLocked(effectivePolicyInputs{user: policy.DefaultDenyPolicy()})
+				s.mu.Unlock()
+				require.NoError(t, err)
+			}
+			running := m.running
+			events := []string{}
+			m.revisionOwner.stop = func(got *mitmproxy.Running) {
+				require.Same(t, running, got)
+				require.Nil(t, m.running)
+				require.Nil(t, m.revisionSession)
+				events = append(events, "stop")
+			}
+			session.close = func() error {
+				events = append(events, "close")
+				if kind != "clean" {
+					return errors.New("private-cleanup-secret")
+				}
+				return nil
+			}
+			session.update = func(context.Context, credentialvault.ActiveSnapshot, int64) (revision.Identity, error) {
+				return revision.Identity{}, revision.ErrTransportUnavailable
+			}
+			_, err := s.mutateRevisionVault(mutationContext(t), m, prepareEmptyVault)
+			require.ErrorIs(t, err, revision.ErrTransportUnavailable)
+			require.NotContains(t, err.Error(), "private-cleanup-secret")
+			require.Equal(t, []string{"stop", "close"}, events)
+			require.True(t, s.mitmGate.MitmPending())
+			if kind == "legacy-cleanup-failed" {
+				require.Nil(t, s.revisionRecovery, "legacy helper cannot acquire a new owner")
+				return
+			}
+			_, epoch, ticket, captureErr := s.captureRevisionBootstrap(context.Background())
+			require.Zero(t, epoch)
+			if kind == "clean" {
+				require.NoError(t, captureErr, "ordinary clean terminal failure remains eligible for fresh bootstrap")
+				require.NotNil(t, ticket)
+				require.Equal(t, revisionRecoveryNone, s.revisionRecovery.reason)
+			} else {
+				require.ErrorIs(t, captureErr, errRevisionRecoveryRequired)
+				require.Nil(t, ticket)
+				require.Equal(t, revisionRecoverySessionCleanupFailed, s.revisionRecovery.reason)
+				require.NotContains(t, captureErr.Error(), "private-cleanup-secret")
+			}
+		})
+	}
+}

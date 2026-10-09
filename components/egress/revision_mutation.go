@@ -54,6 +54,9 @@ func (s *policyServer) mutateRevisionVault(
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.revisionRecovery.recoveryErrorLocked(); err != nil {
+		return empty, err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -93,7 +96,9 @@ func (s *policyServer) mutateRevisionVault(
 		m.revisionOwner.stop(running)
 		// Close failures remain a failed transaction. Do not expose error text that
 		// may contain credentials or filesystem details, or restore readiness here.
-		_ = session.Close()
+		if err := session.Close(); err != nil && s.revisionRecovery != nil {
+			s.requireRevisionRecoveryLocked(revisionRecoverySessionCleanupFailed)
+		}
 		return empty, revision.ErrTransportUnavailable
 	}
 	config, err := session.MitmproxyConfig()
