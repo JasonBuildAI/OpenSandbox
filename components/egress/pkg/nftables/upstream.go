@@ -74,7 +74,7 @@ func buildUpstreamProxyStatic(table string, ep *UpstreamProxyEndpoint) string {
 func (m *Manager) AddUpstreamProxyIPs(ctx context.Context, ips []ResolvedIP) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.quiesced {
+	if m.quiesced.Load() {
 		return ErrQuiesced
 	}
 	if m.opts.UpstreamProxy == nil {

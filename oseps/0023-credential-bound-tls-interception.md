@@ -1176,11 +1176,13 @@ so they can return 503 while an admitted writer finishes. Lock order remains
 policy/Vault barrier, any already-held process-lifecycle lock, then Manager lock;
 the Manager does not call back into the owner.
 
-The lock-protected write-admission boundary covers static replacement,
-`AddResolvedIPs` and its locked helper, `AddResolvedDomain`, late
-`applyDomainRefresh` results, active TCP lease renewal, and
-`AddUpstreamProxyIPs`. A writer already holding the Manager lock may complete
-before quiescence takes effect. An in-flight DNS query may return later, but
+The atomic write-admission gate covers static replacement, `AddResolvedIPs`,
+`AddResolvedDomain`, late `applyDomainRefresh` results, active TCP lease renewal,
+and `AddUpstreamProxyIPs`. Quiescence closes this gate before waiting for the
+Manager lock; queued and new writers check it after acquiring the lock. A writer
+that passed the gate before it closed may complete its nft update and associated
+state publication. Quiescence returns only after that admitted operation drains.
+An in-flight DNS query may return later, but
 cannot write nft or republish old authorization tracking. Upstream proxy lease
 renewal also stops: DNS-learned addresses may expire and later proxy connections
 may fail. Existing traffic and established connections can still be permitted.

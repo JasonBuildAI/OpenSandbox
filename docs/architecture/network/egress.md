@@ -104,11 +104,14 @@ does not freeze it. Policy-file persistence and session-cleanup failures freeze
 it through the recovery owner. The owner publishes the health and bootstrap
 restrictions before waiting for an already admitted nft writer, so `/healthz`
 can return 503 while that writer drains. The write-admission boundary is the
-point where the frozen state is set under the Manager lock; an earlier admitted
-write may finish before that point.
+atomic closure of admission, before waiting for the Manager lock. Queued and
+new writers check that gate after acquiring the lock and cannot enter while
+recovery waits. An operation admitted before the gate closes may finish its nft
+update and associated state publication; the freeze call returns only after
+that operation has drained.
 
 The freeze covers six runtime paths: static policy replacement (`ApplyStatic`),
-direct dynamic IP additions (`AddResolvedIPs` and its locked helper), DNS answer
+direct dynamic IP additions (`AddResolvedIPs`), DNS answer
 publication (`AddResolvedDomain`), late domain-refresh results
 (`applyDomainRefresh`), active TCP lease renewal, and upstream proxy address
 updates (`AddUpstreamProxyIPs`). DNS queries already in flight may complete,

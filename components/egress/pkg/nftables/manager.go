@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/alibaba/opensandbox/egress/pkg/constants"
@@ -67,7 +68,7 @@ type Manager struct {
 	run          runner
 	opts         Options
 	mu           sync.Mutex
-	quiesced     bool
+	quiesced     atomic.Bool
 	tracker      *connectionTracker
 	domainPolicy *policy.NetworkPolicy
 	domains      map[string]*resolvedDomain
@@ -100,7 +101,7 @@ func newManager(r runner, opts Options) *Manager {
 func (m *Manager) ApplyStatic(ctx context.Context, p *policy.NetworkPolicy) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.quiesced {
+	if m.quiesced.Load() {
 		return ErrQuiesced
 	}
 	if p == nil {
@@ -112,7 +113,7 @@ func (m *Manager) ApplyStatic(ctx context.Context, p *policy.NetworkPolicy) erro
 	script, err := buildRuleset(p, m.opts)
 	if err != nil {
 		if m.opts.QuiesceOnApplyFailure {
-			m.quiesced = true
+			m.quiesced.Store(true)
 		}
 		return err
 	}
@@ -133,7 +134,7 @@ func (m *Manager) ApplyStatic(ctx context.Context, p *policy.NetworkPolicy) erro
 		// Keep the failure and freeze in the same critical section so queued
 		// writers cannot publish old permits before the owner receives it.
 		if m.opts.QuiesceOnApplyFailure {
-			m.quiesced = true
+			m.quiesced.Store(true)
 		}
 		telemetry.RecordNftablesUpdateFailed(telemetry.NftOpStaticApply)
 		return err
@@ -150,13 +151,16 @@ func (m *Manager) ApplyStatic(ctx context.Context, p *policy.NetworkPolicy) erro
 func (m *Manager) AddResolvedIPs(ctx context.Context, ips []ResolvedIP) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.quiesced.Load() {
+		return ErrQuiesced
+	}
 	return m.addResolvedIPsLocked(ctx, ips)
 }
 
+// addResolvedIPsLocked completes an admitted operation. The caller must hold
+// m.mu and have checked admission before changing any associated state. Do not
+// recheck here: Quiesce may close admission while that operation is draining.
 func (m *Manager) addResolvedIPsLocked(ctx context.Context, ips []ResolvedIP) error {
-	if m.quiesced {
-		return ErrQuiesced
-	}
 	script := buildAddResolvedIPsScript(tableName, ips)
 	if script == "" {
 		return nil

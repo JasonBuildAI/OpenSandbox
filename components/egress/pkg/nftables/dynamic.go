@@ -77,7 +77,7 @@ func (m *Manager) AddResolvedDomain(ctx context.Context, domain string, ips []Re
 	domain = strings.ToLower(strings.TrimSuffix(domain, "."))
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.quiesced {
+	if m.quiesced.Load() {
 		return ErrQuiesced
 	}
 	if m.domainPolicy == nil {
@@ -161,7 +161,7 @@ func (m *Manager) refreshDomains(ctx context.Context, lookup func(context.Contex
 		lastAttempt time.Time
 	}
 	m.mu.Lock()
-	if m.quiesced {
+	if m.quiesced.Load() {
 		m.mu.Unlock()
 		return
 	}
@@ -198,7 +198,7 @@ func (m *Manager) refreshDomains(ctx context.Context, lookup func(context.Contex
 					return
 				}
 				m.mu.Lock()
-				if m.quiesced {
+				if m.quiesced.Load() {
 					m.mu.Unlock()
 					return
 				}
@@ -219,7 +219,7 @@ func (m *Manager) refreshDomains(ctx context.Context, lookup func(context.Contex
 				if err != nil {
 					var retryIn time.Duration
 					m.mu.Lock()
-					if m.quiesced {
+					if m.quiesced.Load() {
 						m.mu.Unlock()
 						return
 					}
@@ -258,7 +258,7 @@ func (m *Manager) refreshDomains(ctx context.Context, lookup func(context.Contex
 func (m *Manager) applyDomainRefresh(ctx context.Context, domain string, entry *resolvedDomain, ips []ResolvedIP) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.quiesced || ctx.Err() != nil || m.domains[domain] != entry || m.domainPolicy == nil || m.domainPolicy.Evaluate(domain) != policy.ActionAllow {
+	if m.quiesced.Load() || ctx.Err() != nil || m.domains[domain] != entry || m.domainPolicy == nil || m.domainPolicy.Evaluate(domain) != policy.ActionAllow {
 		return
 	}
 	entry.failures = 0

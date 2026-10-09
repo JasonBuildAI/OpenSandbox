@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"maps"
 	"net/netip"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -122,11 +123,6 @@ func TestManagerQuiescence_AllWriters(t *testing.T) {
 	writers := map[string]func(*Manager) error{
 		"static":     func(m *Manager) error { return m.ApplyStatic(context.Background(), policy.DefaultDenyPolicy()) },
 		"direct IPs": func(m *Manager) error { return m.AddResolvedIPs(context.Background(), quiescenceIPs()) },
-		"locked IP helper": func(m *Manager) error {
-			m.mu.Lock()
-			defer m.mu.Unlock()
-			return m.addResolvedIPsLocked(context.Background(), quiescenceIPs())
-		},
 		"DNS callback": func(m *Manager) error {
 			return m.AddResolvedDomain(context.Background(), "old.example.com", quiescenceIPs())
 		},
@@ -298,6 +294,85 @@ func TestManagerQuiescence_QueuedDomainWork(t *testing.T) {
 	<-done
 	require.EqualValues(t, domainRefreshWorkers, lookups.Load(), "selected but unstarted jobs must be abandoned")
 	require.Equal(t, calls, r.calls())
+}
+
+// awaitClosedAdmission observes the admission boundary while the caller holds
+// Manager.mu. The timer is only a deadlock watchdog; no assertion depends on
+// goroutine scheduling order or on how long draining takes.
+func awaitClosedAdmission(t *testing.T, m *Manager) {
+	t.Helper()
+	closed := make(chan struct{})
+	go func() {
+		for !m.isQuiesced() {
+			runtime.Gosched()
+		}
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("admission did not close while Manager.mu was held")
+	}
+}
+
+func TestManagerQuiescence_ClosesAdmissionBeforeDrain(t *testing.T) {
+	m, r := seededQuiescenceManager(t, false)
+	calls := r.calls()
+	m.mu.Lock()
+	unlock := sync.OnceFunc(m.mu.Unlock)
+	defer unlock()
+	writerDone := make(chan error, 1)
+	go func() { writerDone <- m.AddResolvedIPs(context.Background(), quiescenceIPs()) }()
+	quiesceDone := make(chan struct{})
+	go func() {
+		m.Quiesce()
+		close(quiesceDone)
+	}()
+	awaitClosedAdmission(t, m)
+	select {
+	case <-quiesceDone:
+		t.Fatal("Quiesce returned before the current lock holder drained")
+	default:
+	}
+	unlock()
+	// Rejection must hold regardless of which mutex waiter is scheduled first.
+	require.ErrorIs(t, <-writerDone, ErrQuiesced)
+	<-quiesceDone
+	require.Equal(t, calls, r.calls())
+}
+
+func TestManagerQuiescence_AdmittedDomainRefreshCompletes(t *testing.T) {
+	m, r := seededQuiescenceManager(t, false)
+	calls := r.calls()
+	entry := m.domains["old.example.com"]
+	entered, release := make(chan struct{}), make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	defer unblock()
+	now := m.tracker.now().Add(time.Minute)
+	markEntered := sync.OnceFunc(func() { close(entered) })
+	m.tracker.now = func() time.Time {
+		markEntered()
+		<-release
+		return now
+	}
+	refreshDone := make(chan struct{})
+	go func() {
+		m.applyDomainRefresh(context.Background(), "old.example.com", entry, quiescenceIPs()[1:])
+		close(refreshDone)
+	}()
+	<-entered // The refresh passed admission and still owns Manager.mu.
+	quiesceDone := make(chan struct{})
+	go func() {
+		m.Quiesce()
+		close(quiesceDone)
+	}()
+	awaitClosedAdmission(t, m)
+	unblock()
+	<-refreshDone
+	<-quiesceDone
+	require.Len(t, entry.addresses, 1, "an admitted refresh completes its state publication")
+	require.Contains(t, entry.addresses, quiescenceIPs()[1].Addr)
+	require.Equal(t, calls+1, r.calls(), "an admitted refresh completes its nft update")
 }
 
 func TestManagerQuiescence_AlreadyRunningWriter(t *testing.T) {

@@ -103,7 +103,7 @@ func (t *connectionTracker) run(ctx context.Context, interval time.Duration, man
 func (t *connectionTracker) refreshActiveConnections(ctx context.Context, connections []tcpConnection, manager *Manager) error {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	if manager.quiesced {
+	if manager.quiesced.Load() {
 		return ErrQuiesced
 	}
 	plan := t.refreshCandidates(connections)
@@ -121,7 +121,7 @@ func (t *connectionTracker) refreshActiveConnections(ctx context.Context, connec
 func (t *connectionTracker) clearPreviousActiveIPs(manager *Manager) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	if manager.quiesced {
+	if manager.quiesced.Load() {
 		return
 	}
 	t.previousActiveIPs = make(map[netip.Addr]struct{})

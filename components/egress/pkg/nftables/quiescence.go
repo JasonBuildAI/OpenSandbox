@@ -19,16 +19,15 @@ import "errors"
 // ErrQuiesced reports that this Manager no longer admits runtime nft writes.
 var ErrQuiesced = errors.New("nftables manager is quiesced")
 
-// Quiesce permanently freezes runtime writes after any current lock holder
-// finishes. It does not remove enforcement or cancel an already admitted write.
+// Quiesce permanently closes admission before waiting for the current lock
+// holder to finish. Returning guarantees admitted runtime writes have drained.
+// It does not remove enforcement or cancel an already admitted write.
 func (m *Manager) Quiesce() {
+	m.quiesced.Store(true)
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.quiesced = true
+	m.mu.Unlock()
 }
 
 func (m *Manager) isQuiesced() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.quiesced
+	return m.quiesced.Load()
 }
