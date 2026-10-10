@@ -95,6 +95,13 @@ func (s *policyServer) initRevisionRecoveryLocked(inputs effectivePolicyInputs) 
 	if err != nil {
 		return err
 	}
+	if s.policyFile != "" {
+		store, err := policy.NewAtomicPolicyFile(s.policyFile)
+		if err != nil {
+			return fmt.Errorf("experimental policy storage: %w", err)
+		}
+		s.atomicPolicyFile = store
+	}
 	s.revisionRecovery = &revisionRecoveryState{current: base, identity: &revisionBootstrapIdentity{}}
 	return nil
 }

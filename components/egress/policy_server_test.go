@@ -747,7 +747,7 @@ func TestRevisionRecoveryPolicyEffectClassification(t *testing.T) {
 				wantStatus, wantChanged = http.StatusBadRequest, false
 			case "persist":
 				s.policyFile = filepath.Join(t.TempDir(), "missing", "policy.json")
-				wantStatus, wantRecovery, wantChanged = http.StatusInternalServerError, true, false
+				wantStatus, wantChanged = http.StatusInternalServerError, false
 			case "nft-no-file", "nft-restored-file":
 				nft.err = errors.New("private-nft-error")
 				wantStatus, wantRecovery, wantChanged = http.StatusInternalServerError, true, false

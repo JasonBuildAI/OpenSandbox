@@ -96,11 +96,56 @@ recovery reason remains sticky for that Go process incarnation; successful
 readback, listener checks and ordinary child restarts cannot clear it. There is
 no reset API in this increment.
 
+When this gate is enabled and `OPENSANDBOX_EGRESS_POLICY_FILE` is configured,
+policy persistence requires an **egress-owned writable directory mount**. Mount
+the directory containing the policy, rather than binding the policy file itself.
+The directory must be owned by the egress process's effective UID, owner-writable
+and searchable, and not group- or world-writable. Only that egress instance may
+write the directory or policy file. Ancestors must be root- or effective-UID-owned
+and protected from other writers (shared sticky ancestors such as `/tmp` are
+permitted). The parent directory must already exist; egress does not create it,
+change host permissions, or migrate existing mounts.
+
+The experimental store requires Linux mount identities from `statx`, or from
+`/proc/self/fdinfo` when `statx` mount IDs are unavailable. It rejects single-file bind mounts,
+read-only projections, symlinks in the path, non-regular files and hard-linked
+files before replacing the original. Unsupported storage fails startup, and is
+revalidated for each update. Existing file extended attributes (including ACLs
+and SELinux labels), parent-directory ACLs, and inherited temporary-file extended
+attributes are unsupported and rejected rather than silently discarded. This
+includes SELinux-labeled container storage; the experimental gate must remain off
+for such layouts. Egress does not remove labels or change host security policy.
+The operator must use a filesystem that supports
+same-directory rename and file/directory synchronization. For example, mount a
+prepared host directory at `/var/egress/policy` and configure the file path as
+`/var/egress/policy/policy.json`. Keep platform `allow.always`/`deny.always` inputs
+outside this exclusively written directory.
+
+An update writes a new temporary inode in that same directory, preserves the
+existing file's owner and permission bits (new files use `0600`), synchronizes and
+closes it, renames it over the policy, then synchronizes the directory. A known
+failure before rename leaves the original untouched: no restore or nft apply is
+attempted, and that failure alone does not require recovery or freeze writers.
+Once rename is attempted, a failure is conservatively treated as an uncertain
+outcome. The owner enters sticky recovery before best-effort restoration. Restore
+uses atomic replacement of the exact original bytes and metadata, or synchronized
+removal when the file did not previously exist. Even successful restoration does
+not clear recovery. Temporary files are cleaned up on ordinary error returns;
+a process crash may leave a temporary file for operator inspection.
+
+This protocol does not make policy files and nft state one crash-consistent
+transaction. It provides no durable recovery journal, kernel rollback or packet
+fence. Existing open file descriptors continue to see the previous inode; readers
+must reopen the policy path to observe replacements. Default deployments with the
+experimental gate off, including DNS-only mode, retain legacy in-place persistence.
+An experimental owner without a configured policy file retains its existing
+behavior. Fast Sandbox does not use this sidecar policy-file store.
+
 In the ordinary sidecar's experimental revision runtime, entering recovery also
 synchronously freezes runtime writes in the same nft Manager. A terminal static
 apply error freezes that Manager before releasing its lock, starting with the
 first startup apply; a successful missing-table fallback remains a success and
-does not freeze it. Policy-file persistence and session-cleanup failures freeze
+does not freeze it. Uncertain policy-file persistence and session-cleanup failures freeze
 it through the recovery owner. The owner publishes the health and bootstrap
 restrictions before waiting for an already admitted nft writer, so `/healthz`
 can return 503 while that writer drains. The write-admission boundary is the

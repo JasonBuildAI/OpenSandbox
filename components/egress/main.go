@@ -70,6 +70,16 @@ func main() {
 		return
 	}
 
+	// Reject unsupported experimental storage before policy loading or network
+	// setup. Fast Sandbox dispatched above does not use this sidecar store.
+	if constants.IsTruthy(os.Getenv(constants.EnvExperimentalRevisionRuntime)) {
+		if path := strings.TrimSpace(os.Getenv(constants.EnvEgressPolicyFile)); path != "" {
+			if _, err := policy.NewAtomicPolicyFile(path); err != nil {
+				log.Fatalf("invalid experimental policy storage: %v", err)
+			}
+		}
+	}
+
 	// Erase any stale mitmproxy CA left on the shared volume by a previous
 	// egress generation so the agent's bootstrap wait-loop blocks for this
 	// generation's export. See PurgeStaleExportedCA / upstream issue #1370.

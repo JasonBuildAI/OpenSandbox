@@ -184,7 +184,7 @@ type policyServer struct {
 	token           string
 	enforcementMode string
 	nameserverIPs   []netip.Addr
-	policyFile      string     // if set, successful /policy changes persist (truncate+write+fsync)
+	policyFile      string     // optional persistence; experimental owner uses atomicPolicyFile
 	maxEgressRules  int        // 0 = unlimited; cap len(Egress) for POST/PATCH
 	mu              sync.Mutex // serializes /policy updates with effective-policy reads and Vault writes
 
@@ -195,6 +195,7 @@ type policyServer struct {
 	lastAlwaysFPSet           bool
 	credentialVault           *credentialvault.Store
 	revisionRecovery          *revisionRecoveryState
+	atomicPolicyFile          atomicPolicyFileStore
 	mitmGate                  *mitmproxy.HealthGate
 	credentialVaultRequireTLS bool
 
@@ -675,8 +676,8 @@ func (s *policyServer) handleDelete(w http.ResponseWriter, r *http.Request) {
 
 // commitPolicy applies one logical change: optional disk persist → merge always file rules → nft
 // static (with nameserver allow-IPs) → then update in-memory user policy (POST/PATCH/GET view).
-// A failed change retains the existing best-effort file restoration. For the
-// experimental owner, restoration does not prove the external state is known.
+// Experimental persistence uses atomic replacement and stage-aware recovery.
+// Best-effort restoration never clears an uncertain external-effect latch.
 func (s *policyServer) commitPolicy(ctx context.Context, w http.ResponseWriter, pol *policy.NetworkPolicy, op string) bool {
 	alwaysDeny, alwaysAllow := s.currentAlwaysRules()
 	stagedBase, err := s.prepareRevisionBaseReplacementLocked(effectivePolicyInputs{user: pol, alwaysDeny: alwaysDeny, alwaysAllow: alwaysAllow})
@@ -694,27 +695,11 @@ func (s *policyServer) commitPolicy(ctx context.Context, w http.ResponseWriter, 
 		pol = frozen.user
 		alwaysDeny, alwaysAllow = frozen.alwaysDeny, frozen.alwaysAllow
 	}
-	prevFile, prevFileExists, readErr := s.readPolicyFile()
-	if readErr != nil {
-		logEgressUpdateFailedError(fmt.Sprintf("read policy file: %v", readErr))
-		log.Errorf("policy API: read policy file failed: %v", readErr)
-		http.Error(w, fmt.Sprintf("failed to persist policy: %v", readErr), http.StatusInternalServerError)
-		return false
-	}
-	if s.policyFile != "" {
-		s.invalidateRevisionBootstrapLocked()
-	}
-	if err := s.persistPolicy(pol); err != nil {
-		if s.revisionRecovery != nil && s.policyFile != "" {
-			s.requireRevisionRecoveryLocked(revisionRecoveryExternalEffectsUnknown)
-		}
-		logEgressUpdateFailedError(fmt.Sprintf("persist policy: %v", err))
-		log.Errorf("policy API: persist policy failed: %v", err)
-		// A failed write may leave a truncated file behind.
-		if restoreErr := s.restorePolicyFile(prevFile, prevFileExists); restoreErr != nil {
-			log.Errorf("policy API: restore policy file after failed persist: %v", restoreErr)
-		}
-		http.Error(w, fmt.Sprintf("failed to persist policy: %v", err), http.StatusInternalServerError)
+	restore, persistErr := s.persistPolicyChangeLocked(pol)
+	if persistErr != nil {
+		logEgressUpdateFailedError(fmt.Sprintf("persist policy: %v", persistErr))
+		log.Errorf("policy API: persist policy failed: %v", persistErr)
+		http.Error(w, fmt.Sprintf("failed to persist policy: %v", persistErr), http.StatusInternalServerError)
 		return false
 	}
 	merged := policy.MergeAlwaysOverlay(pol, alwaysDeny, alwaysAllow)
@@ -730,7 +715,7 @@ func (s *policyServer) commitPolicy(ctx context.Context, w http.ResponseWriter, 
 			log.Errorf("policy API: nftables apply failed (%s): %v", op, err)
 			// Retain the existing best-effort disk restoration. A successful
 			// restore does not establish that the kernel remained unchanged.
-			if restoreErr := s.restorePolicyFile(prevFile, prevFileExists); restoreErr != nil {
+			if restoreErr := restore(); restoreErr != nil {
 				log.Errorf("policy API: restore policy file after failed apply: %v", restoreErr)
 			}
 			http.Error(w, fmt.Sprintf("failed to apply nftables policy: %v", err), http.StatusInternalServerError)

@@ -97,7 +97,7 @@ func TestRevisionNftQuiescence_RecoverySources(t *testing.T) {
 			switch source {
 			case "policy-persist", "policy-static":
 				if source == "policy-persist" {
-					s.policyFile = filepath.Join(t.TempDir(), "missing", "policy.json")
+					injectUnknownPolicySave(s)
 				} else {
 					failStatic.Store(true)
 				}
@@ -163,7 +163,7 @@ func TestRevisionNftQuiescence_RecoverySources(t *testing.T) {
 
 func TestRevisionNftQuiescence_HealthWhileWriterDrains(t *testing.T) {
 	s := recoveryPolicyFixture(t)
-	s.policyFile = filepath.Join(t.TempDir(), "missing", "policy.json")
+	injectUnknownPolicySave(s)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	writerStarted, releaseWriter := make(chan struct{}), make(chan struct{})
@@ -309,6 +309,6 @@ func TestRevisionNftQuiescence_NonRecoveryControls(t *testing.T) {
 		w = httptest.NewRecorder()
 		s.handlePost(w, httptest.NewRequest(http.MethodPost, "/policy", strings.NewReader(`{"defaultAction":"deny"}`)))
 		require.Equal(t, http.StatusInternalServerError, w.Code)
-		require.Equal(t, http.StatusServiceUnavailable, recoveryHealthzProbe(s).Code)
+		require.Equal(t, http.StatusOK, recoveryHealthzProbe(s).Code, "known pre-rename failure keeps the experimental DNS owner healthy")
 	})
 }
