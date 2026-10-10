@@ -543,3 +543,46 @@ func TestAtomicPolicyFilePreRenameAndCloseFailureRemainUnchanged(t *testing.T) {
 	assertAtomicFileImage(t, path, original, true, 0o600)
 	assertNoAtomicTemps(t, filepath.Dir(path))
 }
+
+func TestAtomicPolicyFileDirectorySyncPreflight(t *testing.T) {
+	for _, syncErr := range []error{unix.EINVAL, unix.ENOTSUP} {
+		for _, exists := range []bool{false, true} {
+			t.Run(syncErr.Error()+"/"+map[bool]string{false: "absent", true: "existing"}[exists], func(t *testing.T) {
+				dir := t.TempDir()
+				path := filepath.Join(dir, "policy.json")
+				original := []byte("exact original\x00\n")
+				if exists {
+					require.NoError(t, os.WriteFile(path, original, 0o640))
+				}
+				ops := defaultAtomicFileOps()
+				syncs, closes := 0, 0
+				ops.syncDir = func(*os.File) error { syncs++; return syncErr }
+				closeDir := ops.closeDir
+				ops.closeDir = func(f *os.File) error { closes++; return closeDir(f) }
+				ops.create = func(*os.File) (atomicTempFile, error) { t.Fatal("preflight must not create a file"); return nil, nil }
+				ops.rename = func(*os.File, string, string) error { t.Fatal("preflight must not rename"); return nil }
+				store, err := newAtomicPolicyFile(path, ops)
+				require.Nil(t, store)
+				require.ErrorIs(t, err, syncErr)
+				require.ErrorContains(t, err, "directory-sync-preflight")
+				require.Equal(t, 1, syncs)
+				require.Equal(t, 1, closes)
+				assertAtomicFileImage(t, path, original, exists, 0o640)
+				assertNoAtomicTemps(t, dir)
+
+				// An owner revalidating an already constructed store must also
+				// discover a lost capability before it starts external effects.
+				store, err = NewAtomicPolicyFile(path)
+				require.NoError(t, err)
+				store.ops = ops
+				snapshot, err := store.Snapshot()
+				require.Nil(t, snapshot)
+				require.ErrorIs(t, err, syncErr)
+				require.Equal(t, 2, syncs)
+				require.Equal(t, 2, closes)
+				assertAtomicFileImage(t, path, original, exists, 0o640)
+				assertNoAtomicTemps(t, dir)
+			})
+		}
+	}
+}

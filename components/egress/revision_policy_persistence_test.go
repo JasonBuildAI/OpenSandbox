@@ -63,6 +63,7 @@ func TestRevisionAtomicPolicyOutcomeWiring(t *testing.T) {
 		recovery                                     bool
 	}{
 		{"snapshot", policy.FileUnchanged, true, false, false, false, 500, 0, false},
+		{"snapshot-directory-sync", policy.FileUnchanged, true, false, false, false, 500, 0, false},
 		{"pre-rename", policy.FileUnchanged, false, true, false, false, 500, 0, false},
 		{"rename-unknown", policy.FileUnknown, false, true, false, false, 500, 1, true},
 		{"restore-failure", policy.FileUnknown, false, true, true, false, 500, 1, true},
@@ -81,6 +82,9 @@ func TestRevisionAtomicPolicyOutcomeWiring(t *testing.T) {
 			injected := errors.New("injected persistence stage")
 			if tc.snapshotFail {
 				f.snapshotErr = injected
+				if tc.name == "snapshot-directory-sync" {
+					f.snapshotErr = &policy.FileMutationError{Phase: "directory-sync-preflight", Err: injected}
+				}
 			}
 			if tc.saveFail {
 				f.saveErr = injected
@@ -102,6 +106,9 @@ func TestRevisionAtomicPolicyOutcomeWiring(t *testing.T) {
 			s.handlePost(w, httptest.NewRequest(http.MethodPost, "/policy", strings.NewReader(`{"defaultAction":"allow"}`)))
 			require.Equal(t, tc.wantStatus, w.Code)
 			require.Equal(t, tc.restores, f.restores)
+			if tc.snapshotFail {
+				require.Zero(t, f.saves)
+			}
 			require.Equal(t, tc.recovery, s.revisionRecoveryRequired.Load())
 			if tc.recovery {
 				require.ErrorIs(t, validateRecoveryTicket(s, ticket), errRevisionRecoveryRequired)
@@ -122,41 +129,6 @@ func TestRevisionAtomicPolicyOutcomeWiring(t *testing.T) {
 			}
 			if tc.saveFail || tc.snapshotFail || tc.state == policy.FileUnknown {
 				require.Zero(t, nft.calls)
-			}
-		})
-	}
-}
-
-func TestRevisionAtomicPolicyRealRestore(t *testing.T) {
-	for _, exists := range []bool{false, true} {
-		t.Run(map[bool]string{false: "absent", true: "existing"}[exists], func(t *testing.T) {
-			s := recoveryPolicyFixture(t)
-			s.policyFile = filepath.Join(t.TempDir(), "policy.json")
-			original := []byte("  { \"defaultAction\": \"deny\" } \n")
-			if exists {
-				require.NoError(t, os.WriteFile(s.policyFile, original, 0640))
-			}
-			s.nft = &stubNft{err: errors.New("uncertain nft apply")}
-			w := httptest.NewRecorder()
-			s.handlePost(w, httptest.NewRequest(http.MethodPost, "/policy", strings.NewReader(`{"defaultAction":"allow"}`)))
-			require.Equal(t, http.StatusInternalServerError, w.Code)
-			require.True(t, s.revisionRecoveryRequired.Load())
-			data, err := os.ReadFile(s.policyFile)
-			if exists {
-				require.NoError(t, err)
-				require.Equal(t, original, data)
-				info, err := os.Stat(s.policyFile)
-				require.NoError(t, err)
-				require.Equal(t, os.FileMode(0640), info.Mode().Perm())
-			} else {
-				require.True(t, os.IsNotExist(err))
-			}
-			entries, err := os.ReadDir(filepath.Dir(s.policyFile))
-			require.NoError(t, err)
-			if exists {
-				require.Len(t, entries, 1)
-			} else {
-				require.Empty(t, entries)
 			}
 		})
 	}

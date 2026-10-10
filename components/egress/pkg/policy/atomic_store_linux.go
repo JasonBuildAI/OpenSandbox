@@ -75,6 +75,10 @@ type atomicFileOps struct {
 // Empty paths are unsupported; callers with persistence disabled should not
 // construct a store. It never creates directories or migrates host mounts.
 func NewAtomicPolicyFile(path string) (*AtomicPolicyFile, error) {
+	return newAtomicPolicyFile(path, defaultAtomicFileOps())
+}
+
+func newAtomicPolicyFile(path string, ops atomicFileOps) (*AtomicPolicyFile, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return nil, atomicFileError("validate", errors.New("empty policy path"))
@@ -88,7 +92,7 @@ func NewAtomicPolicyFile(path string) (*AtomicPolicyFile, error) {
 	if err != nil {
 		return nil, atomicFileError("validate", err)
 	}
-	s := &AtomicPolicyFile{path: absolute, dir: filepath.Dir(absolute), name: filepath.Base(absolute), ops: defaultAtomicFileOps()}
+	s := &AtomicPolicyFile{path: absolute, dir: filepath.Dir(absolute), name: filepath.Base(absolute), ops: ops}
 	if _, err := s.Snapshot(); err != nil {
 		return nil, err
 	}
@@ -111,6 +115,13 @@ func (s *AtomicPolicyFile) Snapshot() (snapshot *PolicyFileSnapshot, err error) 
 	snapshot, err = s.ops.snapshot(dir, s.name, s.path)
 	if err != nil {
 		return nil, atomicFileError("snapshot", err)
+	}
+	// Probe without replacing the authoritative file. Unsupported directory
+	// synchronization must fail construction (and each owner's pre-effect
+	// snapshot), not first become visible after publishing a replacement.
+	// A later sync can still fail, so this does not weaken post-rename recovery.
+	if err := s.ops.syncDir(dir); err != nil {
+		return nil, atomicFileError("directory-sync-preflight", err)
 	}
 	return snapshot, nil
 }

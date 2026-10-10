@@ -23,6 +23,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -724,6 +725,9 @@ func recoveryPolicyFixture(t *testing.T) *policyServer {
 func TestRevisionRecoveryPolicyEffectClassification(t *testing.T) {
 	for _, kind := range []string{"json", "binding", "read-file", "invalid-overlay", "persist", "nft-no-file", "nft-restored-file", "success-no-effects", "success-same-content", "success-reset", "success-nft", "success-file", "legacy-failure"} {
 		t.Run(kind, func(t *testing.T) {
+			if runtime.GOOS != "linux" && (kind == "success-file" || kind == "nft-restored-file") {
+				t.Skip("real experimental atomic policy storage requires Linux")
+			}
 			s := recoveryPolicyFixture(t)
 			nft := &stubNft{}
 			s.nft = nft

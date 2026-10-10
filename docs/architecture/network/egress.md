@@ -109,8 +109,10 @@ change host permissions, or migrate existing mounts.
 The experimental store requires Linux mount identities from `statx`, or from
 `/proc/self/fdinfo` when `statx` mount IDs are unavailable. It rejects single-file bind mounts,
 read-only projections, symlinks in the path, non-regular files and hard-linked
-files before replacing the original. Unsupported storage fails startup, and is
-revalidated for each update. Existing file extended attributes (including ACLs
+files before replacing the original. Unsupported directory/file layouts detected by validation fail startup and are
+revalidated for each update. Construction and the pre-update snapshot probe
+directory synchronization before replacing the policy file; a later I/O failure
+can still require recovery after rename. Existing file extended attributes (including ACLs
 and SELinux labels), parent-directory ACLs, and inherited temporary-file extended
 attributes are unsupported and rejected rather than silently discarded. This
 includes SELinux-labeled container storage; the experimental gate must remain off
