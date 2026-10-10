@@ -48,12 +48,21 @@ func atomicFileError(phase string, err error) error {
 }
 
 // PolicyFileSnapshot is an opaque, exact image of one policy path. It preserves
-// absence, bytes, permission bits and ownership; it is not a reserialized policy.
+// absence, bytes, permission bits and ownership plus SELinux comparison state;
+// it is not a reserialized policy or a copy of integrity attributes.
 type PolicyFileSnapshot struct {
-	path   string
-	exists bool
-	data   []byte
-	mode   fs.FileMode
-	uid    int
-	gid    int
+	path     string
+	exists   bool
+	data     []byte
+	mode     fs.FileMode
+	uid      int
+	gid      int
+	security policyFileSecurity
+}
+
+// policyFileSecurity records only comparison/presence information. Integrity
+// attribute payloads are never retained or copied onto replacement contents.
+type policyFileSecurity struct {
+	selinux  string
+	ima, evm bool
 }

@@ -112,11 +112,30 @@ read-only projections, symlinks in the path, non-regular files and hard-linked
 files before replacing the original. Unsupported directory/file layouts detected by validation fail startup and are
 revalidated for each update. Construction and the pre-update snapshot probe
 directory synchronization before replacing the policy file; a later I/O failure
-can still require recovery after rename. Existing file extended attributes (including ACLs
-and SELinux labels), parent-directory ACLs, and inherited temporary-file extended
-attributes are unsupported and rejected rather than silently discarded. This
-includes SELinux-labeled container storage; the experimental gate must remain off
-for such layouts. Egress does not remove labels or change host security policy.
+can still require recovery after rename.
+
+Kernel-managed `security.selinux` labels, mutable IMA digest attributes
+(`security.ima` digest/digest-ng formats), and EVM HMAC attributes (`security.evm`)
+are permitted on existing and newly created files. Egress never copies these
+attributes: the kernel assigns or regenerates them for each replacement inode.
+For an existing file, the replacement's SELinux label must exactly match the
+snapshot label, and any previously present IMA digest/EVM HMAC must be present
+again before rename. Signature formats, unknown integrity formats, user xattrs,
+file capabilities, other unknown attributes, and file/parent-directory ACLs are
+rejected before replacement. Attribute format checks classify this storage
+contract; they do not authenticate digests/HMACs or replace kernel appraisal.
+
+Use a dedicated directory whose directory/process SELinux creation policy gives
+all randomized sibling temporary files the intended policy label. For an
+initially absent policy, that kernel-assigned temporary-inode label becomes the
+policy label. Egress does not look up labels for the final basename, run
+`restorecon`, or implement filename-specific transitions. A pre-existing custom
+or filename-dependent label that differs from the temporary inode is rejected;
+Egress never silently relabels it. IMA/EVM deployments must allow the kernel to
+regenerate mutable integrity attributes for randomized sibling files under the
+same appraisal rules as the final policy path; policies requiring externally
+signed replacement files are unsupported. No host security policy is changed.
+
 The operator must use a filesystem that supports
 same-directory rename and file/directory synchronization. For example, mount a
 prepared host directory at `/var/egress/policy` and configure the file path as
@@ -125,12 +144,17 @@ outside this exclusively written directory.
 
 An update writes a new temporary inode in that same directory, preserves the
 existing file's owner and permission bits (new files use `0600`), synchronizes and
-closes it, renames it over the policy, then synchronizes the directory. A known
-failure before rename leaves the original untouched: no restore or nft apply is
+closes the writer, then reopens the same inode read-only with no-follow and
+identity checks. This allows last-writer-close IMA updates to finish before final
+attribute inspection and another file sync. Only then does it rename over the
+policy and synchronize the directory. A known
+failure before rename does not write or replace the original: no restore or nft apply is
 attempted, and that failure alone does not require recovery or freeze writers.
 Once rename is attempted, a failure is conservatively treated as an uncertain
 outcome. The owner enters sticky recovery before best-effort restoration. Restore
-uses atomic replacement of the exact original bytes and metadata, or synchronized
+uses atomic replacement of the exact original bytes, owner and permission bits
+with the snapshot SELinux label check. Integrity attributes are regenerated, not
+restored byte-for-byte. It uses synchronized
 removal when the file did not previously exist. Even successful restoration does
 not clear recovery. Temporary files are cleaned up on ordinary error returns;
 a process crash may leave a temporary file for operator inspection.
