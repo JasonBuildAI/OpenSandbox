@@ -23,10 +23,13 @@ those stream encodings on any host.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
+from opensandbox_cli import main as cli_main
 from opensandbox_cli.main import cli
 
 
@@ -36,8 +39,9 @@ def _gbk_runner() -> CliRunner:
 
 
 class TestNonUtf8Streams:
-    def test_help_output_is_not_aborted(self) -> None:
-        runner = _gbk_runner()
+    @pytest.mark.parametrize("charset", ["gbk", "cp1252"])
+    def test_help_output_is_not_aborted(self, charset: str) -> None:
+        runner = CliRunner(charset=charset)
 
         root_help = runner.invoke(cli, ["--help"])
         assert root_help.exit_code == 0
@@ -63,6 +67,14 @@ class TestNonUtf8Streams:
         assert set_result.exit_code == 0
         assert 'domain = "team.host"' in cfg_path.read_text(encoding="utf-8")
 
+    def test_utf8_streams_still_render_emoji(self, tmp_path: Path) -> None:
+        result = CliRunner().invoke(
+            cli, ["--config", str(tmp_path / "config.toml"), "config", "init"]
+        )
+
+        assert result.exit_code == 0
+        assert "\u2705" in result.output
+
     def test_real_errors_still_fail(self, tmp_path: Path) -> None:
         result = _gbk_runner().invoke(
             cli,
@@ -78,5 +90,31 @@ class TestNonUtf8Streams:
 
         assert result.exit_code != 0
         assert "Config file not found" in result.output
+
+
+class _RecordingStream:
+    """Stand-in for a text stream whose error handler can be reconfigured."""
+
+    def __init__(self, encoding: str) -> None:
+        self.encoding = encoding
+        self.errors: str | None = None
+        self.reconfigured: list[dict[str, str]] = []
+
+    def reconfigure(self, **kwargs: str) -> None:
+        self.reconfigured.append(kwargs)
+
+
+def test_only_unencodable_streams_are_reconfigured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stdout = _RecordingStream("utf-8")
+    stderr = _RecordingStream("gbk")
+    monkeypatch.setattr(sys, "stdout", stdout)
+    monkeypatch.setattr(sys, "stderr", stderr)
+
+    cli_main._configure_output_streams()
+
+    assert stdout.reconfigured == []
+    assert stderr.reconfigured == [{"errors": "replace"}]
 
 
