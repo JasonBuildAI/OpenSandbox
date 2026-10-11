@@ -135,13 +135,24 @@ function normalizeDomainBase(input: string): {
   return { domainBase: stripV1Suffix(input) };
 }
 
-function createNodeFetch(): {
+function createNodeFetch(opts: {
+  /**
+   * Response-header deadline (ms) for the upload dispatcher, or null to
+   * disable it. Undici keeps this timer alive while the request body makes
+   * progress and enforces it once the body has been sent (and if the transfer
+   * stalls), so it never caps a healthy body send but still bounds the wait
+   * for response headers.
+   */
+  uploadHeadersTimeoutMs: number | null;
+}): {
   fetch: typeof fetch;
+  uploadFetch: typeof fetch;
   close: () => Promise<void>;
 } {
   if (!isNodeRuntime()) {
     return {
       fetch,
+      uploadFetch: fetch,
       close: async () => {
         // Browser fetch has no pooled dispatcher to close.
       },
@@ -150,55 +161,73 @@ function createNodeFetch(): {
 
   const baseFetch = fetch;
   let dispatcher: unknown | undefined;
-  let dispatcherPromise: Promise<unknown> | null = null;
+  let uploadDispatcher: unknown | undefined;
+  let dispatcherPromise: Promise<void> | null = null;
 
-  const nodeFetch: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+  const ensureDispatchers = (): Promise<void> => {
     dispatcherPromise ??= (async () => {
       try {
         const mod = await import("undici");
         const Agent = (mod as { Agent?: new (...args: any[]) => unknown }).Agent;
         if (!Agent) {
-          return undefined;
+          return;
         }
         dispatcher = new Agent({
           keepAliveTimeout: DEFAULT_KEEPALIVE_TIMEOUT_MS,
           keepAliveMaxTimeout: DEFAULT_KEEPALIVE_TIMEOUT_MS,
         });
-        return dispatcher;
+        uploadDispatcher = new Agent({
+          keepAliveTimeout: DEFAULT_KEEPALIVE_TIMEOUT_MS,
+          keepAliveMaxTimeout: DEFAULT_KEEPALIVE_TIMEOUT_MS,
+          // null disables the deadline (requestTimeoutSeconds = 0).
+          headersTimeout: opts.uploadHeadersTimeoutMs,
+        });
       } catch {
-        return undefined;
+        // Undici is unavailable; fall back to the global fetch below.
       }
     })();
-
-    if (dispatcherPromise) {
-      await dispatcherPromise;
-    }
-
-    if (dispatcher) {
-      const mergedInit = { ...(init ?? {}), dispatcher } as RequestInit & {
-        dispatcher?: unknown;
-      };
-      return baseFetch(input, mergedInit as RequestInit);
-    }
-
-    return baseFetch(input, init);
+    return dispatcherPromise;
   };
+
+  const fetchWithDispatcher = (
+    getDispatcher: () => unknown | undefined
+  ): typeof fetch => {
+    return async (input: RequestInfo | URL, init?: RequestInit) => {
+      await ensureDispatchers();
+
+      const target = getDispatcher();
+      if (target) {
+        const mergedInit = { ...(init ?? {}), dispatcher: target } as RequestInit & {
+          dispatcher?: unknown;
+        };
+        return baseFetch(input, mergedInit as RequestInit);
+      }
+
+      return baseFetch(input, init);
+    };
+  };
+
+  const nodeFetch = fetchWithDispatcher(() => dispatcher);
+  const nodeUploadFetch = fetchWithDispatcher(() => uploadDispatcher);
 
   return {
     fetch: nodeFetch,
+    uploadFetch: nodeUploadFetch,
     close: async () => {
       if (dispatcherPromise) {
         await dispatcherPromise.catch(() => undefined);
       }
-      if (
-        dispatcher &&
-        typeof dispatcher === "object" &&
-        typeof (dispatcher as any).close === "function"
-      ) {
-        try {
-          await (dispatcher as any).close();
-        } catch {
-          // swallow close errors
+      for (const target of [dispatcher, uploadDispatcher]) {
+        if (
+          target &&
+          typeof target === "object" &&
+          typeof (target as any).close === "function"
+        ) {
+          try {
+            await (target as any).close();
+          } catch {
+            // swallow close errors
+          }
         }
       }
     },
@@ -396,10 +425,14 @@ export class ConnectionConfig {
   /**
    * Fetch used for file uploads, which stream a caller-provided request body.
    *
-   * Like {@link sseFetch}, it has no SDK-imposed overall timeout: the request
-   * timeout bounds the wait for a response, and a large upload can legitimately
-   * take longer than that while the body keeps flowing. The runtime's own
-   * transport guards and socket timeouts still apply.
+   * The request timeout never caps a healthy body send: a large upload can
+   * legitimately take longer than that while the body keeps flowing. On
+   * Node.js a dedicated `undici` dispatcher bounds silence instead: once the
+   * body has been sent it waits at most `requestTimeoutSeconds` (default 30s)
+   * for response headers, and a transfer that stops making progress for that
+   * long is aborted rather than hanging - the same contract as the Go SDK's
+   * `ResponseHeaderTimeout`. Set `requestTimeoutSeconds` to 0 to disable the
+   * deadline.
    */
   get uploadFetch(): typeof fetch {
     return this._uploadFetch ?? fetch;
@@ -418,7 +451,15 @@ export class ConnectionConfig {
   private initializeTransport(): void {
     if (this._transportInitialized) return;
 
-    const { fetch: baseFetch, close } = createNodeFetch();
+    const requestTimeoutMs = Math.floor(this.requestTimeoutSeconds * 1000);
+    const { fetch: baseFetch, uploadFetch: baseUploadFetch, close } = createNodeFetch({
+      // Bound the wait for response headers after the body has been sent; 0
+      // (or an invalid value) disables the deadline.
+      uploadHeadersTimeoutMs:
+        Number.isFinite(requestTimeoutMs) && requestTimeoutMs > 0
+          ? requestTimeoutMs
+          : null,
+    });
     this._fetch = createTimedFetch({
       baseFetch,
       timeoutSeconds: this.requestTimeoutSeconds,
@@ -434,7 +475,7 @@ export class ConnectionConfig {
       label: "sse",
     });
     this._uploadFetch = createTimedFetch({
-      baseFetch,
+      baseFetch: baseUploadFetch,
       timeoutSeconds: 0,
       debug: this.debug,
       defaultHeaders: this.headers,
@@ -448,9 +489,10 @@ export class ConnectionConfig {
   /**
    * Ensure this configuration has transport helpers (fetch/SSE/upload) allocated.
    *
-   * On Node.js this creates a dedicated `undici` dispatcher; on browsers it
-   * simply reuses the global fetch. Returns either `this` or a cloned config
-   * with the transport initialized.
+   * On Node.js this creates dedicated `undici` dispatchers (the upload one
+   * enforces the post-send response-header deadline); on browsers it simply
+   * reuses the global fetch. Returns either `this` or a cloned config with the
+   * transport initialized.
    *
    * Ownership: an uninitialized input yields a clone the SDK may close; an
    * already-initialized input is returned as-is and stays caller-owned.

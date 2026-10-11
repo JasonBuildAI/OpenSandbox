@@ -28,7 +28,8 @@ import {
 // Regression: an upload whose request body takes longer than
 // requestTimeoutSeconds must still complete. The request timeout bounds the
 // wait for the server's response; it must not abort a caller-sized body while
-// it is still being sent.
+// it is still being sent, and once the body has been sent it must still bound
+// the wait for response headers.
 
 const REQUEST_TIMEOUT_SECONDS = 0.25;
 const CHUNK_DELAY_MS = 120;
@@ -44,6 +45,7 @@ async function withServer(handler, run) {
   try {
     return await run(url);
   } finally {
+    server.closeAllConnections?.();
     await new Promise((resolve) => server.close(resolve));
   }
 }
@@ -60,14 +62,9 @@ function filesAdapter(url) {
   }).files;
 }
 
-async function readBody(req, { stallMs = 0 } = {}) {
-  if (stallMs > 0) {
-    req.pause();
-    await sleep(stallMs);
-    req.resume();
-  }
-  return await new Promise((resolve) => {
-    let bytes = 0;
+async function readBody(req, { stallMs = 0, stallCount = 0 } = {}) {
+  let bytes = 0;
+  const counted = new Promise((resolve) => {
     req.on("data", (chunk) => {
       bytes += chunk.length;
     });
@@ -76,6 +73,12 @@ async function readBody(req, { stallMs = 0 } = {}) {
     req.on("aborted", () => resolve(bytes));
     req.on("error", () => resolve(bytes));
   });
+  for (let i = 0; i < stallCount; i += 1) {
+    req.pause();
+    await sleep(stallMs);
+    req.resume();
+  }
+  return await counted;
 }
 
 async function* slowBody() {
@@ -107,13 +110,14 @@ test("streamed upload survives a body transfer longer than requestTimeoutSeconds
 });
 
 test("in-memory upload survives a body transfer longer than requestTimeoutSeconds", async () => {
-  // 8 MiB cannot fit into the socket buffers, so the send below stays blocked
-  // while the server pauses reading for longer than the request timeout.
+  // 8 MiB cannot fit into the socket buffers. The server keeps stalling in
+  // short steps that stay under the request timeout but add up past it, so the
+  // transfer outlives the timeout while data keeps flowing.
   const payload = new Uint8Array(8 * 1024 * 1024);
   let received = 0;
   await withServer(
     async (req, res) => {
-      received = await readBody(req, { stallMs: 1000 });
+      received = await readBody(req, { stallMs: 100, stallCount: 4 });
       res.writeHead(200, { "content-type": "application/json" });
       res.end("{}");
     },
@@ -125,6 +129,39 @@ test("in-memory upload survives a body transfer longer than requestTimeoutSecond
   );
   assert.ok(received > 0, "the server should have received the upload");
 });
+
+test(
+  "upload fails on the response-header deadline when the server never responds",
+  { timeout: 5000 },
+  async () => {
+    const started = Date.now();
+    await assert.rejects(
+      withServer(
+        async (req) => {
+          // Consume the body, then never send response headers.
+          await readBody(req);
+        },
+        async (url) => {
+          await filesAdapter(url).writeFiles([
+            { path: "/tmp/stuck.bin", data: "hello" },
+          ]);
+        },
+      ),
+      (error) => {
+        const elapsed = Date.now() - started;
+        assert.ok(
+          elapsed < 4000,
+          `expected the response-header deadline to fire, took ${elapsed}ms`
+        );
+        assert.match(
+          `${error?.message ?? ""} ${error?.cause?.code ?? ""}`,
+          /HEADERS_TIMEOUT|headers timeout|fetch failed/i
+        );
+        return true;
+      },
+    );
+  },
+);
 
 test("file calls that are not uploads keep the request timeout", { timeout: 5000 }, async () => {
   await assert.rejects(
