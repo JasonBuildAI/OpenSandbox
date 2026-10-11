@@ -1,0 +1,3 @@
+# Coordination registry (append-only)
+
+- claim: 8k2f | 2026-10-11T21:00+08:00 | 旧PR: #2165 | 缺陷: JS SDK aborts file uploads whose request body takes longer than requestTimeout (30s default); downloads survive, headers stay bounded | 文件: sdks/sandbox/javascript/src/config/connection.ts,sdks/sandbox/javascript/src/factory/defaultAdapterFactory.ts,sdks/sandbox/javascript/src/adapters/filesystemAdapter.ts,sdks/sandbox/javascript/src/adapters/isolatedFilesystemAdapter.ts,sdks/sandbox/javascript/src/adapters/isolatedSessionsAdapter.ts,sdks/code-interpreter/javascript/src/factory/defaultAdapterFactory.ts | 指纹: 2165-sdks/sandbox/javascript/src/config/connection.ts-createTimedFetch/initializeTransport | issue: #待回填
