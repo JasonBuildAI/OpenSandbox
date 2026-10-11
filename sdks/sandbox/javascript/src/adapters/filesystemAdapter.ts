@@ -199,6 +199,12 @@ export interface FilesystemAdapterOptions {
    */
   baseUrl: string;
   fetch?: typeof fetch;
+  /**
+   * No-overall-timeout fetch used for uploads, whose request body is produced
+   * by the caller and may take longer than the connection's request timeout.
+   * See `ConnectionConfig.uploadFetch`. Falls back to `fetch`.
+   */
+  uploadFetch?: typeof fetch;
   headers?: Record<string, string>;
 }
 
@@ -239,6 +245,7 @@ export class FilesystemAdapter implements SandboxFiles {
       .replace("{gid}", String(gid));
   }
   private readonly fetch: typeof fetch;
+  private readonly uploadFetch: typeof fetch;
 
   private static readonly Api = {
     // This is intentionally derived from OpenAPI schema types so API changes surface quickly.
@@ -266,6 +273,7 @@ export class FilesystemAdapter implements SandboxFiles {
     private readonly identityBaseUrl: string = opts.baseUrl
   ) {
     this.fetch = opts.fetch ?? fetch;
+    this.uploadFetch = opts.uploadFetch ?? this.fetch;
   }
 
   withIdentity(uid: number, gid: number): SandboxFiles {
@@ -515,7 +523,7 @@ export class FilesystemAdapter implements SandboxFiles {
       });
       const stream = toReadableStream(bodyIt);
 
-      const res = await this.fetch(url, {
+      const res = await this.uploadFetch(url, {
         method: "POST",
         headers: {
           "content-type": `multipart/form-data; boundary=${boundary}`,
@@ -562,7 +570,7 @@ export class FilesystemAdapter implements SandboxFiles {
       form.append("file", fileBlob, fileName);
     }
 
-    const res = await this.fetch(url, {
+    const res = await this.uploadFetch(url, {
       method: "POST",
       headers: {
         ...(this.opts.headers ?? {}),

@@ -40,6 +40,13 @@ export interface ConnectionConfigOptions {
   /**
    * Request timeout applied to all SDK HTTP calls (best-effort; wraps fetch).
    * Defaults to 30 seconds.
+   *
+   * The timeout bounds the wait for a response, so it stops covering a request
+   * as soon as the response headers arrive (streaming responses are not cut
+   * off). Requests that send a caller-provided body (file uploads) use a
+   * separate fetch without an overall timeout, because producing the body can
+   * legitimately take longer than this value; see
+   * {@link ConnectionConfig.uploadFetch}.
    */
   requestTimeoutSeconds?: number;
   /**
@@ -304,6 +311,7 @@ export class ConnectionConfig {
   readonly headers: Record<string, string>;
   private _fetch: typeof fetch | null;
   private _sseFetch: typeof fetch | null;
+  private _uploadFetch: typeof fetch | null;
   readonly requestTimeoutSeconds: number;
   readonly debug: boolean;
   readonly userAgent: string = DEFAULT_USER_AGENT;
@@ -370,6 +378,7 @@ export class ConnectionConfig {
     this.headers = headers;
     this._fetch = null;
     this._sseFetch = null;
+    this._uploadFetch = null;
     this._closeTransport = async () => {
       // No transport allocated yet; nothing to close.
     };
@@ -382,6 +391,18 @@ export class ConnectionConfig {
 
   get sseFetch(): typeof fetch {
     return this._sseFetch ?? fetch;
+  }
+
+  /**
+   * Fetch used for file uploads, which stream a caller-provided request body.
+   *
+   * Like {@link sseFetch}, it has no SDK-imposed overall timeout: the request
+   * timeout bounds the wait for a response, and a large upload can legitimately
+   * take longer than that while the body keeps flowing. The runtime's own
+   * transport guards and socket timeouts still apply.
+   */
+  get uploadFetch(): typeof fetch {
+    return this._uploadFetch ?? fetch;
   }
 
   getBaseUrl(): string {
@@ -412,13 +433,20 @@ export class ConnectionConfig {
       defaultHeaders: this.headers,
       label: "sse",
     });
+    this._uploadFetch = createTimedFetch({
+      baseFetch,
+      timeoutSeconds: 0,
+      debug: this.debug,
+      defaultHeaders: this.headers,
+      label: "upload",
+    });
     this._closeTransport = close;
     this._transportInitialized = true;
     this._ownsTransport = true;
   }
 
   /**
-   * Ensure this configuration has transport helpers (fetch/SSE) allocated.
+   * Ensure this configuration has transport helpers (fetch/SSE/upload) allocated.
    *
    * On Node.js this creates a dedicated `undici` dispatcher; on browsers it
    * simply reuses the global fetch. Returns either `this` or a cloned config
