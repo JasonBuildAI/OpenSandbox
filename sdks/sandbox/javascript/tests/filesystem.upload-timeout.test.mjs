@@ -126,7 +126,7 @@ test("in-memory upload survives a body transfer longer than requestTimeoutSecond
   assert.ok(received > 0, "the server should have received the upload");
 });
 
-test("file calls that are not uploads keep the request timeout", async () => {
+test("file calls that are not uploads keep the request timeout", { timeout: 5000 }, async () => {
   await assert.rejects(
     withServer(
       () => {
