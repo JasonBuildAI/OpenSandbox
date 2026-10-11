@@ -27,6 +27,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 from click.testing import CliRunner
 
 from opensandbox_cli import main as cli_main
@@ -74,6 +75,25 @@ class TestNonUtf8Streams:
 
         assert result.exit_code == 0
         assert "\u2705" in result.output
+
+    def test_yaml_output_round_trips_on_gbk(self, tmp_path: Path) -> None:
+        runner = _gbk_runner()
+        cfg_path = tmp_path / "config.toml"
+        runner.invoke(cli, ["--config", str(cfg_path), "config", "init"])
+        value = "img-\u2705"
+        set_result = runner.invoke(
+            cli,
+            ["--config", str(cfg_path), "config", "set", "defaults.image", value],
+        )
+        assert set_result.exit_code == 0
+
+        result = runner.invoke(
+            cli, ["--config", str(cfg_path), "config", "show", "-o", "yaml"]
+        )
+
+        assert result.exit_code == 0
+        assert "\u2705" not in result.output
+        assert yaml.safe_load(result.output)["default_image"] == value
 
     def test_real_errors_still_fail(self, tmp_path: Path) -> None:
         result = _gbk_runner().invoke(
