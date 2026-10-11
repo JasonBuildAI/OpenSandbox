@@ -19,19 +19,27 @@ page (cp936, cp1252, ...) or a POSIX ``C`` locale cannot represent. Rich and
 Click used to raise ``UnicodeEncodeError`` and the command exited 1 with a
 traceback after already doing its work. ``CliRunner(charset=...)`` reproduces
 those stream encodings on any host.
+
+Streams that cannot represent a character escape it (``backslashreplace``)
+instead of substituting ``?``, so payload and machine-readable output stay
+recoverable.
 """
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
-from click.testing import CliRunner
+from click.testing import CliRunner, Result
+from opensandbox.models.execd import OutputMessage
 
 from opensandbox_cli import main as cli_main
 from opensandbox_cli.main import cli
+from opensandbox_cli.output import OutputFormatter
 
 
 def _gbk_runner() -> CliRunner:
@@ -112,6 +120,53 @@ class TestNonUtf8Streams:
         assert "Config file not found" in result.output
 
 
+def _invoke_on_gbk(args: list[str], sandbox: MagicMock) -> Result:
+    """Run the CLI against a mocked SDK with a gbk output stream."""
+    ctx = MagicMock()
+    ctx.resolved_config = {"color": False}
+    ctx.make_output.side_effect = lambda fmt: OutputFormatter(fmt, color=False)
+    ctx.connect_sandbox.return_value = sandbox
+    runner = CliRunner(charset="gbk")
+    with patch("opensandbox_cli.main.resolve_config", return_value={}), patch(
+        "opensandbox_cli.main.ClientContext", return_value=ctx
+    ):
+        return runner.invoke(cli, args, catch_exceptions=False)
+
+
+class TestPayloadOutputIsLossless:
+    """Payload writes must not degrade to ``?`` on non-UTF-8 streams."""
+
+    def test_file_cat_streams_payload_without_loss(self) -> None:
+        sandbox = MagicMock()
+        sandbox.files.read_file.return_value = "file \u2705"
+        result = _invoke_on_gbk(["file", "cat", "sb-1", "/note.txt"], sandbox)
+
+        assert result.exit_code == 0
+        assert result.output == "file \\u2705"
+
+    def test_command_streaming_output_without_loss(self) -> None:
+        sandbox = MagicMock()
+
+        def streamed(
+            payload: str, *, opts: Any = None, handlers: Any = None
+        ) -> MagicMock:
+            handlers.on_stdout(OutputMessage(text="ready \u2705\n", timestamp=0))
+            handlers.on_stderr(OutputMessage(text="warn \u2705\n", timestamp=0))
+            execution = MagicMock()
+            execution.error = None
+            return execution
+
+        sandbox.commands.run.side_effect = streamed
+        result = _invoke_on_gbk(
+            ["command", "run", "sb-1", "-o", "raw", "--", "echo", "ready"], sandbox
+        )
+
+        assert result.exit_code == 0
+        assert "ready \\u2705" in result.output
+        assert "warn \\u2705" in result.output
+        assert "?" not in result.output
+
+
 class _RecordingStream:
     """Stand-in for a text stream whose error handler can be reconfigured."""
 
@@ -135,6 +190,6 @@ def test_only_unencodable_streams_are_reconfigured(
     cli_main._configure_output_streams()
 
     assert stdout.reconfigured == []
-    assert stderr.reconfigured == [{"errors": "replace"}]
+    assert stderr.reconfigured == [{"errors": "backslashreplace"}]
 
 

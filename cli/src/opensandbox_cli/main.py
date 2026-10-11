@@ -59,8 +59,13 @@ def _configure_output_streams() -> None:
     Click and Rich print emoji and box-drawing characters. On a legacy Windows
     code page (cp936, cp1252, ...) or a POSIX ``C`` locale writing them raises
     ``UnicodeEncodeError``, which aborts the command - even after the work is
-    done - so streams whose encoding cannot represent that output replace the
+    done - so streams whose encoding cannot represent that output escape the
     characters instead of raising.
+
+    Escaping (``backslashreplace``) keeps payload writes - raw command and
+    file data, machine-readable output - recoverable; ``errors="replace"``
+    would silently corrupt them into ``?``. CPython uses the same handler for
+    Windows stderr.
     """
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
@@ -71,7 +76,7 @@ def _configure_output_streams() -> None:
             _OUTPUT_PROBE.encode(encoding)
         except (LookupError, UnicodeEncodeError):
             try:
-                reconfigure(errors="replace")
+                reconfigure(errors="backslashreplace")
             except (OSError, ValueError):  # pragma: no cover - detached stream
                 pass
 
