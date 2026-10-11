@@ -5,3 +5,5 @@
 - claim-update: 8k2f | 2026-10-11T20:58+08:00 | issue: #2184 | status: fix implemented on branch fix/js-sdk-upload-timeout-8k2f, PR pending
 - claim-update: 8k2f | 2026-10-11T21:02+08:00 | PR: opensandbox-group/OpenSandbox#2186 opened (base main, head JasonBuildAI:fix/js-sdk-upload-timeout-8k2f)
 - claim-update: 8k2f | 2026-10-11T21:23+08:00 | PR #2186 final head a93f2f14 (3 commits; docs parity + test timeout guard after independent review, verdict approve-with-nits, no blockers) | status: done
+- claim-update: w9d2x | 2026-10-11T22:05+08:00 | issue: #2185 opened
+- claim-update: w9d2x | 2026-10-11T22:20+08:00 | PR: opensandbox-group/OpenSandbox#2187 opened (base main, head JasonBuildAI:fix/cli-config-topic-w9d2x, commit 6001fea1, +115/-0 lines)
