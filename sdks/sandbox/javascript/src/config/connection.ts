@@ -137,13 +137,14 @@ function normalizeDomainBase(input: string): {
 
 function createNodeFetch(opts: {
   /**
-   * Response-header deadline (ms) for the upload dispatcher, or null to
-   * disable it. Undici keeps this timer alive while the request body makes
-   * progress and enforces it once the body has been sent (and if the transfer
-   * stalls), so it never caps a healthy body send but still bounds the wait
-   * for response headers.
+   * Response-header deadline (ms) for the upload dispatcher; 0 disables it.
+   * Undici keeps this timer alive while the request body makes progress and
+   * enforces it once the body has been sent (and if the transfer stalls), so
+   * it never caps a healthy body send but still bounds the wait for response
+   * headers. Pass undici's documented disable value 0; null/undefined would
+   * silently fall back to its 300s default instead of disabling the deadline.
    */
-  uploadHeadersTimeoutMs: number | null;
+  uploadHeadersTimeoutMs: number;
 }): {
   fetch: typeof fetch;
   uploadFetch: typeof fetch;
@@ -179,7 +180,8 @@ function createNodeFetch(opts: {
         uploadDispatcher = new Agent({
           keepAliveTimeout: DEFAULT_KEEPALIVE_TIMEOUT_MS,
           keepAliveMaxTimeout: DEFAULT_KEEPALIVE_TIMEOUT_MS,
-          // null disables the deadline (requestTimeoutSeconds = 0).
+          // 0 disables the deadline (requestTimeoutSeconds <= 0); null would
+          // silently fall back to undici's 300s default.
           headersTimeout: opts.uploadHeadersTimeoutMs,
         });
       } catch {
@@ -454,11 +456,12 @@ export class ConnectionConfig {
     const requestTimeoutMs = Math.floor(this.requestTimeoutSeconds * 1000);
     const { fetch: baseFetch, uploadFetch: baseUploadFetch, close } = createNodeFetch({
       // Bound the wait for response headers after the body has been sent; 0
-      // (or an invalid value) disables the deadline.
+      // (or an invalid value) disables the deadline. Never pass null here:
+      // undici treats null as "unset" and falls back to its 300s default.
       uploadHeadersTimeoutMs:
         Number.isFinite(requestTimeoutMs) && requestTimeoutMs > 0
           ? requestTimeoutMs
-          : null,
+          : 0,
     });
     this._fetch = createTimedFetch({
       baseFetch,

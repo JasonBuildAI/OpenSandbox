@@ -163,6 +163,66 @@ test(
   },
 );
 
+test("requestTimeoutSeconds = 0 disables the upload response-header deadline", async () => {
+  // undici's documented disable value for `headersTimeout` is 0; passing
+  // `null` (or omitting it) silently falls back to undici's 300s default, so
+  // an upload against a wedged server would still abort after ~5 minutes.
+  // Pin the value the SDK hands to undici: it must be 0, not null.
+  const originalFetch = globalThis.fetch;
+  const capturedDispatchers = [];
+  globalThis.fetch = async (_input, init) => {
+    capturedDispatchers.push(init?.dispatcher);
+    return new Response("{}", {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const connectionConfig = new ConnectionConfig({
+    domain: BASE_URL.replace(/^http:\/\//, ""),
+    protocol: "http",
+    requestTimeoutSeconds: 0,
+  }).withTransportIfMissing();
+
+  try {
+    await connectionConfig.uploadFetch(`${BASE_URL}/v1/files`, {
+      method: "POST",
+      body: "hello",
+    });
+    await connectionConfig.fetch(`${BASE_URL}/v1/files`, { method: "GET" });
+  } finally {
+    globalThis.fetch = originalFetch;
+    await connectionConfig.closeTransport();
+  }
+
+  const headersTimeoutOf = (dispatcher) => {
+    assert.ok(
+      dispatcher,
+      "expected the SDK to route through a Node dispatcher",
+    );
+    const options = Object.getOwnPropertySymbols(dispatcher)
+      .map((symbol) => dispatcher[symbol])
+      .find(
+        (value) =>
+          value && typeof value === "object" && "keepAliveTimeout" in value,
+      );
+    assert.ok(options, "undici Agent options should be present");
+    return options.headersTimeout;
+  };
+
+  assert.equal(capturedDispatchers.length, 2);
+  assert.equal(
+    headersTimeoutOf(capturedDispatchers[0]),
+    0,
+    "uploads with requestTimeoutSeconds = 0 must pass undici's disable value 0, not null",
+  );
+  assert.equal(
+    headersTimeoutOf(capturedDispatchers[1]),
+    undefined,
+    "non-upload calls should keep undici's default headers timeout",
+  );
+});
+
 test("file calls that are not uploads keep the request timeout", { timeout: 5000 }, async () => {
   await assert.rejects(
     withServer(
