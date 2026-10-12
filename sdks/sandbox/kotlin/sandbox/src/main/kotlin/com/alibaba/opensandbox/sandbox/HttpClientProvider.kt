@@ -85,14 +85,16 @@ class HttpClientProvider(
 
     // File uploads and downloads are transfers that legitimately outlive the
     // request timeout while they keep making progress, so this client clones the
-    // regular one without the whole-call deadline. The connect, write, and read
-    // timeouts stay in place: a stalled transfer, or one that gets no response
-    // headers within the timeout, still fails instead of hanging (the Go SDK's
-    // ResponseHeaderTimeout contract).
+    // regular one without the default whole-call deadline. The connect, write,
+    // and read timeouts stay in place, and an explicit
+    // RetryPolicy.overallDeadline remains the wall-clock cap for the transfer: a
+    // stalled transfer, or one that runs past the caller's deadline, still fails
+    // instead of hanging (the Go SDK's ResponseHeaderTimeout contract).
     private val transferClientLazy =
         lazy {
+            val transferDeadlineMillis = config.retryPolicy.overallDeadline?.toMillis() ?: 0L
             httpClient.newBuilder()
-                .callTimeout(0, TimeUnit.MILLISECONDS)
+                .callTimeout(transferDeadlineMillis, TimeUnit.MILLISECONDS)
                 .build()
         }
 

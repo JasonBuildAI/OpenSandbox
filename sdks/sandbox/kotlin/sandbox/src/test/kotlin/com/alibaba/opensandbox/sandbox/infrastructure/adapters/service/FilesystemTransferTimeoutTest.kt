@@ -21,6 +21,7 @@ import com.alibaba.opensandbox.sandbox.config.ConnectionConfig
 import com.alibaba.opensandbox.sandbox.domain.exceptions.SandboxException
 import com.alibaba.opensandbox.sandbox.domain.models.execd.filesystem.WriteEntry
 import com.alibaba.opensandbox.sandbox.domain.models.sandboxes.SandboxEndpoint
+import com.alibaba.opensandbox.sandbox.transport.RetryPolicy
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
@@ -103,6 +104,22 @@ class FilesystemTransferTimeoutTest {
     }
 
     @Test
+    fun `download stream that outlives requestTimeout keeps yielding data`() {
+        val body = ByteArray(256 * 1024) { 0x42 }
+        mockWebServer.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setBody(Buffer().write(body))
+                .throttleBody(32L * 1024, 200L, TimeUnit.MILLISECONDS),
+        )
+
+        val received =
+            filesystem().readStream("/tmp/slow.bin", null, null, null).use { it.readBytes() }
+
+        assertEquals(body.size, received.size)
+    }
+
+    @Test
     fun `upload without response headers still fails at the request timeout`() {
         mockWebServer.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
         val started = System.nanoTime()
@@ -131,6 +148,44 @@ class FilesystemTransferTimeoutTest {
         }
 
         assertTrue(elapsedSince(started) < failureBound, "download hang was not bounded")
+    }
+
+    @Test
+    fun `download that keeps making progress still respects an explicit overallDeadline`() {
+        val deadline = Duration.ofSeconds(1)
+        val provider =
+            HttpClientProvider(
+                ConnectionConfig.builder()
+                    .domain("${mockWebServer.hostName}:${mockWebServer.port}")
+                    .protocol("http")
+                    .requestTimeout(Duration.ofSeconds(30))
+                    .retryPolicy(RetryPolicy(maxRetries = 0, overallDeadline = deadline))
+                    .build(),
+            )
+        val body = ByteArray(256 * 1024) { 0x42 }
+        mockWebServer.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setBody(Buffer().write(body))
+                // 8 chunks x 200ms = ~1.6s: every read stays under the deadline, but the
+                // whole transfer outlasts it.
+                .throttleBody(32L * 1024, 200L, TimeUnit.MILLISECONDS),
+        )
+        val started = System.nanoTime()
+
+        provider.use { clientProvider ->
+            val filesystem =
+                FilesystemAdapter(
+                    clientProvider,
+                    SandboxEndpoint("${mockWebServer.hostName}:${mockWebServer.port}"),
+                )
+            assertThrows<SandboxException> {
+                filesystem.readByteArray("/tmp/slow.bin", null, null, null)
+            }
+        }
+
+        assertEquals(1, mockWebServer.requestCount)
+        assertTrue(elapsedSince(started) < failureBound, "overallDeadline was not enforced")
     }
 
     @Test

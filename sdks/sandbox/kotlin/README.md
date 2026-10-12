@@ -428,7 +428,8 @@ Transfer timeouts:
   file upload or download that keeps making progress. A transfer that stalls for
   longer than the timeout, or an upload that gets no response headers within it
   after the body has been sent, fails instead of hanging (the Go SDK's
-  `ResponseHeaderTimeout` contract).
+  `ResponseHeaderTimeout` contract). An explicit `RetryPolicy.overallDeadline`
+  still caps the whole transfer.
 
 | Parameter        | Description                                | Default                      | Environment Variable   |
 | ---------------- | ------------------------------------------ | ---------------------------- | ---------------------- |
