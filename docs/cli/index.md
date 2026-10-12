@@ -460,7 +460,7 @@ Supported targets:
 
 | Target | Install location |
 | --- | --- |
-| `claude` | `./.claude/skills/` or `~/.claude/skills/` |
+| `claude` | `./.claude/skills/<name>/SKILL.md` or `~/.claude/skills/<name>/SKILL.md` |
 | `cursor` | `./.cursor/rules/` or `~/.cursor/rules/` |
 | `codex` | `./.codex/skills/<name>/SKILL.md` or `~/.codex/skills/<name>/SKILL.md` |
 | `copilot` | `./.github/copilot-instructions.md` or `~/.github/copilot-instructions.md` |

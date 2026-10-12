@@ -106,7 +106,9 @@ class TestSkillsCommands:
         assert result.exit_code != 0
         assert "Install guidance:" in result.output
         assert "osb skills install <skill-name> --target <tool> --scope <scope>" in result.output
-        assert not (tmp_path / ".claude" / "skills" / "sandbox-troubleshooting.md").exists()
+        assert not (
+            tmp_path / ".claude" / "skills" / "sandbox-troubleshooting" / "SKILL.md"
+        ).exists()
 
     def test_install_with_skill_but_without_target_prints_guidance(
         self,
@@ -142,8 +144,9 @@ class TestSkillsCommands:
         )
 
         assert result.exit_code == 0
-        dest = tmp_path / ".claude" / "skills" / "sandbox-troubleshooting.md"
+        dest = tmp_path / ".claude" / "skills" / "sandbox-troubleshooting" / "SKILL.md"
         assert dest.exists()
+        assert not (tmp_path / ".claude" / "skills" / "sandbox-troubleshooting.md").exists()
         content = dest.read_text(encoding="utf-8")
         assert content.startswith("---\nname: sandbox-troubleshooting")
 
@@ -418,8 +421,8 @@ class TestSkillsCommands:
         assert result.exit_code == 0
         assert "Install plan:" in result.output
         assert "install one file per skill" in result.output
-        assert (tmp_path / ".claude" / "skills" / "network-egress.md").exists()
-        assert (tmp_path / ".claude" / "skills" / "sandbox-troubleshooting.md").exists()
+        assert (tmp_path / ".claude" / "skills" / "network-egress" / "SKILL.md").exists()
+        assert (tmp_path / ".claude" / "skills" / "sandbox-troubleshooting" / "SKILL.md").exists()
 
 
 def _read_builtin_skill(package_file: str) -> str:

@@ -69,11 +69,13 @@ _TARGETS = cast(dict[str, TargetConfig], {
             "project": {
                 "strategy": "copy",
                 "dest_dir": Path(".claude") / "skills",
+                "dest_file_template": "{slug}/SKILL.md",
                 "preserve_frontmatter": True,
             },
             "global": {
                 "strategy": "copy",
                 "dest_dir": Path.home() / ".claude" / "skills",
+                "dest_file_template": "{slug}/SKILL.md",
                 "preserve_frontmatter": True,
             }
         },
