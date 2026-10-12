@@ -83,6 +83,21 @@ class HttpClientProvider(
 
     val httpClient: OkHttpClient by httpClientLazy
 
+    // File uploads and downloads are transfers that legitimately outlive the
+    // request timeout while they keep making progress, so this client clones the
+    // regular one without the whole-call deadline. The connect, write, and read
+    // timeouts stay in place: a stalled transfer, or one that gets no response
+    // headers within the timeout, still fails instead of hanging (the Go SDK's
+    // ResponseHeaderTimeout contract).
+    private val transferClientLazy =
+        lazy {
+            httpClient.newBuilder()
+                .callTimeout(0, TimeUnit.MILLISECONDS)
+                .build()
+        }
+
+    val transferClient: OkHttpClient by transferClientLazy
+
     // A staged warmup already retries health through its DelayQueue. Clone the
     // regular client so the warmup-only probe shares its dispatcher, connection
     // pool, headers, tracing, timeouts, and logging while skipping both retry
