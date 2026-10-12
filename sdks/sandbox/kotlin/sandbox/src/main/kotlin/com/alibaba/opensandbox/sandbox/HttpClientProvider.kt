@@ -92,7 +92,14 @@ class HttpClientProvider(
     // instead of hanging (the Go SDK's ResponseHeaderTimeout contract).
     private val transferClientLazy =
         lazy {
-            val transferDeadlineMillis = config.retryPolicy.overallDeadline?.toMillis() ?: 0L
+            // OkHttp rejects a call timeout above Int.MAX_VALUE millis, and a
+            // positive deadline that truncates to 0 would silently disable the
+            // cap, so the conversion is clamped instead of passed through.
+            val transferDeadlineMillis =
+                config.retryPolicy.overallDeadline
+                    ?.toMillis()
+                    ?.coerceIn(1L, Int.MAX_VALUE.toLong())
+                    ?: 0L
             httpClient.newBuilder()
                 .callTimeout(transferDeadlineMillis, TimeUnit.MILLISECONDS)
                 .build()

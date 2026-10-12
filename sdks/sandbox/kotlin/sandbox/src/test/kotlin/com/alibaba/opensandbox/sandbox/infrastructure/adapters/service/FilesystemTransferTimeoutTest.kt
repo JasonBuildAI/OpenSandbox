@@ -189,6 +189,31 @@ class FilesystemTransferTimeoutTest {
     }
 
     @Test
+    fun `transfer with an overallDeadline beyond OkHttp's call timeout limit does not fail`() {
+        val provider =
+            HttpClientProvider(
+                ConnectionConfig.builder()
+                    .domain("${mockWebServer.hostName}:${mockWebServer.port}")
+                    .protocol("http")
+                    .requestTimeout(requestTimeout)
+                    .retryPolicy(
+                        RetryPolicy(maxRetries = 0, overallDeadline = Duration.ofDays(30)),
+                    )
+                    .build(),
+            )
+        mockWebServer.enqueue(MockResponse().setResponseCode(200).setBody("payload"))
+
+        provider.use { clientProvider ->
+            val filesystem =
+                FilesystemAdapter(
+                    clientProvider,
+                    SandboxEndpoint("${mockWebServer.hostName}:${mockWebServer.port}"),
+                )
+            assertEquals("payload", filesystem.readFile("/tmp/small.txt", "UTF-8", null))
+        }
+    }
+
+    @Test
     fun `isolated session upload body that outlives requestTimeout still completes`() {
         mockWebServer.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
 
