@@ -473,7 +473,7 @@ Supported targets:
 | `codex` | `./.codex/skills/<name>/SKILL.md` or `~/.codex/skills/<name>/SKILL.md` |
 | `copilot` | `./.github/copilot-instructions.md` or `~/.copilot/copilot-instructions.md` |
 | `windsurf` | `./.windsurfrules` or `~/.windsurfrules` |
-| `cline` | `./.clinerules` or `~/.cline/rules/<name>.md` |
+| `cline` | `./.clinerules` or `~/.cline/rules/opensandbox-<name>.md` |
 | `opencode` | `./.agents/skills/<name>/SKILL.md` or `~/.agents/skills/<name>/SKILL.md` |
 
 Common flows:

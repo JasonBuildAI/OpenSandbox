@@ -155,7 +155,7 @@ _TARGETS = cast(dict[str, TargetConfig], {
             "global": {
                 "strategy": "copy",
                 "dest_dir": Path.home() / ".cline" / "rules",
-                "dest_file_template": "{slug}.md",
+                "dest_file_template": "opensandbox-{slug}.md",
                 "preserve_frontmatter": False,
             }
         },
