@@ -251,6 +251,40 @@ class TestSkillsCommands:
         assert result.exit_code == 0
         assert (tmp_path / "home" / ".codex" / "skills" / "sandbox-troubleshooting" / "SKILL.md").exists()
 
+    def test_install_to_global_cline_uses_documented_rules_directory(
+        self,
+        runner: CliRunner,
+        isolated_skill_targets: None,
+        tmp_path: Path,
+    ) -> None:
+        result = runner.invoke(
+            skills_group,
+            ["install", "network-egress", "--target", "cline", "--scope", "global"],
+        )
+
+        assert result.exit_code == 0
+        dest = tmp_path / "home" / ".cline" / "rules" / "network-egress.md"
+        assert dest.exists()
+        assert dest.read_text(encoding="utf-8").startswith("# OpenSandbox Network Egress")
+        assert not (tmp_path / "home" / ".clinerules").exists()
+
+    def test_install_to_global_copilot_uses_documented_user_file(
+        self,
+        runner: CliRunner,
+        isolated_skill_targets: None,
+        tmp_path: Path,
+    ) -> None:
+        result = runner.invoke(
+            skills_group,
+            ["install", "network-egress", "--target", "copilot", "--scope", "global"],
+        )
+
+        assert result.exit_code == 0
+        dest = tmp_path / "home" / ".copilot" / "copilot-instructions.md"
+        assert dest.exists()
+        assert "# OpenSandbox Network Egress" in dest.read_text(encoding="utf-8")
+        assert not (tmp_path / "home" / ".github" / "copilot-instructions.md").exists()
+
     def test_install_to_project_opencode_creates_skill_directory(
         self,
         runner: CliRunner,
