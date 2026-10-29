@@ -47,6 +47,18 @@ const destinationModeMask = os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.Mod
 // errNotRegularFile rejects a destination a rename cannot replace.
 var errNotRegularFile = errors.New("not a regular file")
 
+// fileOwner is the ownership a session view applies to a written file. set is
+// false for a caller that must leave ownership alone.
+type fileOwner struct {
+	uid, gid int
+	set      bool
+}
+
+// newFileOwner returns the ownership a session view assigns to a written file.
+func newFileOwner(uid, gid uint32) fileOwner {
+	return fileOwner{uid: int(uid), gid: int(gid), set: true}
+}
+
 // stagingFS is the subset of os and *os.Root a staged write needs, so one
 // implementation serves both the plain and the root-confined views.
 type stagingFS interface {
@@ -55,7 +67,6 @@ type stagingFS interface {
 	Readlink(name string) (string, error)
 	Open(name string) (*os.File, error)
 	OpenFile(name string, flag int, perm os.FileMode) (*os.File, error)
-	Chmod(name string, mode os.FileMode) error
 	Rename(oldName, newName string) error
 	Remove(name string) error
 }
@@ -70,9 +81,8 @@ func (osStagingFS) Open(name string) (*os.File, error)     { return os.Open(name
 func (osStagingFS) OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
 	return os.OpenFile(name, flag, perm)
 }
-func (osStagingFS) Chmod(name string, mode os.FileMode) error { return os.Chmod(name, mode) }
-func (osStagingFS) Rename(oldName, newName string) error      { return os.Rename(oldName, newName) }
-func (osStagingFS) Remove(name string) error                  { return os.Remove(name) }
+func (osStagingFS) Rename(oldName, newName string) error { return os.Rename(oldName, newName) }
+func (osStagingFS) Remove(name string) error             { return os.Remove(name) }
 
 // isStagingName reports whether name is one of the staged-write temp files.
 func isStagingName(name string) bool {
@@ -107,7 +117,11 @@ func hideStagingEntries(entries []os.DirEntry) []os.DirEntry {
 // followLink resolves a symlink in the final path component so the rename lands
 // on the file an in-place write would have written through, instead of
 // replacing the link itself.
-func stagedWrite(fsys stagingFS, target string, perm os.FileMode, followLink bool, write func(io.Writer) (int64, error)) (int64, error) {
+//
+// owner is applied to the staging inode before the rename. It has to happen
+// here rather than on the committed path: a chown clears setuid/setgid, so
+// chowning after the rename would drop the mode the write is supposed to keep.
+func stagedWrite(fsys stagingFS, target string, perm os.FileMode, followLink bool, owner fileOwner, write func(io.Writer) (int64, error)) (int64, error) {
 	if followLink {
 		resolved, err := resolveFinalSymlink(fsys, target)
 		if err != nil {
@@ -122,7 +136,15 @@ func stagedWrite(fsys stagingFS, target string, perm os.FileMode, followLink boo
 		// A device or a FIFO cannot be staged and renamed over without
 		// replacing the node with a regular file, so refuse them.
 		return 0, &os.PathError{Op: "write", Path: target, Err: errNotRegularFile}
-	case statErr != nil && !errors.Is(statErr, fs.ErrNotExist):
+	case statErr == nil:
+		// A rename only needs a writable directory, so probe the file itself to
+		// keep rejecting a read-only destination the way an in-place write did.
+		probe, err := fsys.OpenFile(target, os.O_WRONLY, 0)
+		if err != nil {
+			return 0, err
+		}
+		_ = probe.Close()
+	case !errors.Is(statErr, fs.ErrNotExist):
 		return 0, statErr
 	}
 
@@ -133,42 +155,60 @@ func stagedWrite(fsys stagingFS, target string, perm os.FileMode, followLink boo
 	if statErr == nil {
 		stagingPerm = 0o600
 	}
-	stagingPath, err := createStagingFile(fsys, filepath.Dir(target), stagingPerm)
+	staging, err := createStagingFile(fsys, filepath.Dir(target), stagingPerm)
 	if err != nil {
+		// A directory that is only traversable (0555, with a writable file in
+		// it) was writable in place before staging existed. Keep that write
+		// working through the legacy path; its tradeoff is documented on the
+		// route.
+		if statErr == nil && errors.Is(err, fs.ErrPermission) {
+			return writeInPlace(fsys, target, existing.Mode(), owner, write)
+		}
 		return 0, err
 	}
 	committed := false
-	file, err := fsys.OpenFile(stagingPath, os.O_WRONLY, 0)
-	if err != nil {
-		_ = fsys.Remove(stagingPath)
-		return 0, err
-	}
+	ours := true
 	defer func() {
 		if committed {
 			return
 		}
-		_ = file.Close()
-		_ = fsys.Remove(stagingPath)
+		_ = staging.file.Close()
+		if ours {
+			_ = fsys.Remove(staging.name)
+		}
 	}()
 
-	n, err := write(file)
+	n, err := write(staging.file)
 	if err != nil {
 		return n, err
 	}
-	if err := file.Sync(); err != nil {
-		return n, err
-	}
-	if err := file.Close(); err != nil {
-		return n, err
-	}
-	if statErr == nil {
-		// Restore the destination mode before the rename; writing and chown
-		// both clear setuid/setgid, so this must happen after the copy.
-		if err := fsys.Chmod(stagingPath, existing.Mode()&destinationModeMask); err != nil {
+	if owner.set {
+		// Ownership goes on before the mode: chown clears setuid/setgid.
+		if err := staging.file.Chown(owner.uid, owner.gid); err != nil {
 			return n, err
 		}
 	}
-	if err := fsys.Rename(stagingPath, target); err != nil {
+	if statErr == nil {
+		// Restore the destination mode after the copy and after the chown, so
+		// setuid/setgid/sticky survive into the renamed inode.
+		if err := staging.file.Chmod(existing.Mode() & destinationModeMask); err != nil {
+			return n, err
+		}
+	}
+	if err := verifyStagingEntry(fsys, staging); err != nil {
+		// The name no longer refers to this inode, so there is nothing of ours
+		// left to clean up - and removing the name would delete whatever the
+		// session put there instead.
+		ours = false
+		return n, err
+	}
+	if err := staging.file.Sync(); err != nil {
+		return n, err
+	}
+	if err := staging.file.Close(); err != nil {
+		return n, err
+	}
+	if err := fsys.Rename(staging.name, target); err != nil {
 		return n, err
 	}
 	committed = true
@@ -180,13 +220,80 @@ func stagedWrite(fsys stagingFS, target string, perm os.FileMode, followLink boo
 	return n, nil
 }
 
-// createStagingFile atomically creates a new staging file in dir and returns
-// its path.
-func createStagingFile(fsys stagingFS, dir string, perm os.FileMode) (string, error) {
+// writeInPlace is the legacy path for a destination whose directory is not
+// writable but whose file is. Unlike the staged path it truncates first, so a
+// copy that fails partway loses the previous content.
+func writeInPlace(fsys stagingFS, target string, perm os.FileMode, owner fileOwner, write func(io.Writer) (int64, error)) (int64, error) {
+	file, err := fsys.OpenFile(target, os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
+		return 0, err
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			_ = file.Close()
+		}
+	}()
+
+	n, err := write(file)
+	if err != nil {
+		return n, err
+	}
+	if owner.set {
+		if err := file.Chown(owner.uid, owner.gid); err != nil {
+			return n, err
+		}
+		if err := file.Chmod(perm & destinationModeMask); err != nil {
+			return n, err
+		}
+	}
+	if err := file.Sync(); err != nil {
+		return n, err
+	}
+	if err := file.Close(); err != nil {
+		return n, err
+	}
+	closed = true
+	return n, nil
+}
+
+// verifyStagingEntry re-checks the staging name against the open descriptor
+// before the rename. A session can write the destination directory, so it can
+// unlink or replace the staging entry between the exclusive create and the
+// rename; the renamed inode must still be the one this write filled.
+func verifyStagingEntry(fsys stagingFS, staging *stagingFile) error {
+	onDisk, err := fsys.Lstat(staging.name)
+	if err != nil {
+		return err
+	}
+	opened, err := staging.file.Stat()
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(onDisk, opened) {
+		return fmt.Errorf("staging file %s was replaced during the write", staging.name)
+	}
+	return nil
+}
+
+// stagingFile is an open staging inode plus the name it was created under.
+//
+// The descriptor is kept from the exclusive create through the write, the
+// metadata changes and the rename. Reopening the name instead would hand the
+// sandbox workload a window to replace the staging entry with a symlink and
+// redirect the payload, in the very directories a session is allowed to write.
+type stagingFile struct {
+	file *os.File
+	name string
+}
+
+// createStagingFile atomically creates a new staging file in dir. The caller
+// owns the returned descriptor.
+func createStagingFile(fsys stagingFS, dir string, perm os.FileMode) (*stagingFile, error) {
 	for range 10 {
 		var suffix [8]byte
 		if _, err := rand.Read(suffix[:]); err != nil {
-			return "", err
+			return nil, err
 		}
 		name := stagingPrefix + hex.EncodeToString(suffix[:])
 		path := name
@@ -195,14 +302,13 @@ func createStagingFile(fsys stagingFS, dir string, perm os.FileMode) (string, er
 		}
 		file, err := fsys.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
 		if err == nil {
-			_ = file.Close()
-			return path, nil
+			return &stagingFile{file: file, name: path}, nil
 		}
 		if !errors.Is(err, fs.ErrExist) {
-			return "", err
+			return nil, err
 		}
 	}
-	return "", errors.New("could not allocate a unique staging file name")
+	return nil, errors.New("could not allocate a unique staging file name")
 }
 
 // resolveFinalSymlink follows a symlink in the final path component. Because
@@ -244,25 +350,25 @@ func syncDir(fsys stagingFS, dir string) {
 	_ = d.Close()
 }
 
-// writeFileStaged replaces target with data.
-func writeFileStaged(target string, data []byte, perm os.FileMode, followLink bool) error {
-	_, err := stagedWrite(osStagingFS{}, target, perm, followLink, func(w io.Writer) (int64, error) {
+// writeFileStaged replaces target with data, applying owner.
+func writeFileStaged(target string, data []byte, perm os.FileMode, followLink bool, owner fileOwner) error {
+	_, err := stagedWrite(osStagingFS{}, target, perm, followLink, owner, func(w io.Writer) (int64, error) {
 		n, err := w.Write(data)
 		return int64(n), err
 	})
 	return err
 }
 
-// writeReaderStaged replaces target with the bytes read from r.
-func writeReaderStaged(target string, r io.Reader, perm os.FileMode, followLink bool) (int64, error) {
-	return stagedWrite(osStagingFS{}, target, perm, followLink, func(w io.Writer) (int64, error) {
+// writeReaderStaged replaces target with the bytes read from r, applying owner.
+func writeReaderStaged(target string, r io.Reader, perm os.FileMode, followLink bool, owner fileOwner) (int64, error) {
+	return stagedWrite(osStagingFS{}, target, perm, followLink, owner, func(w io.Writer) (int64, error) {
 		return io.Copy(w, r)
 	})
 }
 
 // writeFileConfinedStaged replaces name (root-relative) with data inside root.
-func writeFileConfinedStaged(root *os.Root, name string, data []byte, perm os.FileMode) error {
-	_, err := stagedWrite(root, name, perm, true, func(w io.Writer) (int64, error) {
+func writeFileConfinedStaged(root *os.Root, name string, data []byte, perm os.FileMode, owner fileOwner) error {
+	_, err := stagedWrite(root, name, perm, true, owner, func(w io.Writer) (int64, error) {
 		n, err := w.Write(data)
 		return int64(n), err
 	})
@@ -270,8 +376,8 @@ func writeFileConfinedStaged(root *os.Root, name string, data []byte, perm os.Fi
 }
 
 // writeReaderConfinedStaged replaces name (root-relative) with r inside root.
-func writeReaderConfinedStaged(root *os.Root, name string, r io.Reader, perm os.FileMode) (int64, error) {
-	return stagedWrite(root, name, perm, true, func(w io.Writer) (int64, error) {
+func writeReaderConfinedStaged(root *os.Root, name string, r io.Reader, perm os.FileMode, owner fileOwner) (int64, error) {
+	return stagedWrite(root, name, perm, true, owner, func(w io.Writer) (int64, error) {
 		return io.Copy(w, r)
 	})
 }

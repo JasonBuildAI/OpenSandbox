@@ -16,6 +16,7 @@ package isolation
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -153,7 +154,7 @@ func TestStagedWriteRejectsNonRegularDestination(t *testing.T) {
 	target := filepath.Join(dir, "sub")
 	require.NoError(t, os.Mkdir(target, 0o755))
 
-	err := writeFileStaged(target, []byte("x"), 0o644, false)
+	err := writeFileStaged(target, []byte("x"), 0o644, false, fileOwner{})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, errNotRegularFile)
 
@@ -170,7 +171,7 @@ func TestStagedWriteNewFileUsesRequestedMode(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "new.txt")
 
-	require.NoError(t, writeFileStaged(target, []byte("data"), 0o640, false))
+	require.NoError(t, writeFileStaged(target, []byte("data"), 0o640, false, fileOwner{}))
 
 	info, err := os.Stat(target)
 	require.NoError(t, err)
@@ -189,7 +190,7 @@ func TestStagedWriteFollowsFinalSymlink(t *testing.T) {
 	require.NoError(t, os.WriteFile(target, []byte("old"), 0o644))
 	require.NoError(t, os.Symlink(target, link))
 
-	require.NoError(t, writeFileStaged(link, []byte("new"), 0o644, true))
+	require.NoError(t, writeFileStaged(link, []byte("new"), 0o644, true, fileOwner{}))
 
 	linkInfo, err := os.Lstat(link)
 	require.NoError(t, err)
@@ -200,4 +201,129 @@ func TestStagedWriteFollowsFinalSymlink(t *testing.T) {
 	assert.Equal(t, "new", string(data), "the link target must receive the content")
 }
 
+// TestStagedWriteCreatesRestrictiveMode covers the other half of retaining the
+// create descriptor: reopening the staging name for writing would apply the
+// final mode, so creating a new 0444 or 0000 file would fail where the plain
+// create succeeded.
+func TestStagedWriteCreatesRestrictiveMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits are not meaningful on Windows")
+	}
+	dir := t.TempDir()
+
+	for _, perm := range []os.FileMode{0o444, 0o000} {
+		target := filepath.Join(dir, fmt.Sprintf("new-%o.txt", perm))
+		require.NoError(t, writeFileStaged(target, []byte("data"), perm, false, fileOwner{}), "perm %o", perm)
+
+		info, err := os.Stat(target)
+		require.NoError(t, err)
+		assert.Equal(t, perm, info.Mode().Perm())
+	}
+}
+
 var _ io.Reader = (*failingReader)(nil)
+
+// TestStagedWriteKeepsTheExclusiveDescriptor covers the create-then-reopen
+// window: the payload must go through the descriptor the exclusive create
+// returned, so a workload that unlinks and replaces the staging entry cannot
+// redirect it into another file.
+func TestStagedWriteKeepsTheExclusiveDescriptor(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs a privilege on Windows")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "dest.txt")
+	decoy := filepath.Join(dir, "decoy.txt")
+	require.NoError(t, os.WriteFile(decoy, []byte("untouched"), 0o644))
+
+	var staged string
+	reader := &observeReader{onFirstRead: func() {
+		matches, err := filepath.Glob(filepath.Join(dir, stagingPrefix+"*"))
+		require.NoError(t, err)
+		require.Len(t, matches, 1)
+		staged = matches[0]
+		// A workload that can write this directory can do the same: drop the
+		// staging entry and point its name at another file.
+		require.NoError(t, os.Remove(staged))
+		require.NoError(t, os.Symlink(decoy, staged))
+	}}
+
+	_, err := writeReaderStaged(target, reader, 0o644, false, fileOwner{})
+	require.Error(t, err, "a swapped staging entry must not be renamed into place")
+
+	data, readErr := os.ReadFile(decoy)
+	require.NoError(t, readErr)
+	assert.Equal(t, "untouched", string(data), "the payload must not be redirected through a swapped staging name")
+
+	_, statErr := os.Stat(target)
+	assert.ErrorIs(t, statErr, os.ErrNotExist, "the destination must not appear from a swapped staging entry")
+}
+
+// TestStagedWriteRejectsNonWritableDestination keeps the permission check an
+// in-place write performed by opening the destination for writing. A rename
+// only needs a writable directory, so without the probe a 0444 file inside a
+// writable directory would silently become replaceable.
+func TestStagedWriteRejectsNonWritableDestination(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits are not meaningful on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses the permission check this test asserts")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "readonly.txt")
+	require.NoError(t, os.WriteFile(target, []byte("locked"), 0o444))
+
+	err := writeFileStaged(target, []byte("new"), 0o444, false, fileOwner{})
+	require.ErrorIs(t, err, os.ErrPermission)
+
+	data, readErr := os.ReadFile(target)
+	require.NoError(t, readErr)
+	assert.Equal(t, "locked", string(data), "a rejected write must leave the file intact")
+}
+
+// TestMergedView_WriteFilePreservesSetuid covers the chown ordering: the
+// session views chown the written file, and a chown after the rename would
+// clear the setuid/setgid bits the staged write is supposed to keep.
+func TestMergedView_WriteFilePreservesSetuid(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits are not meaningful on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses the setuid clearing this test depends on")
+	}
+	mv := newTestMergedView(t, WorkspaceRW)
+
+	target := filepath.Join(mv.UpperDir, "helper")
+	require.NoError(t, os.WriteFile(target, []byte("#!/bin/sh\n"), 0o755))
+	require.NoError(t, os.Chmod(target, 0o755|os.ModeSetuid|os.ModeSetgid))
+
+	require.NoError(t, mv.WriteFile("helper", []byte("#!/bin/sh\necho hi\n"), 0o755))
+
+	info, err := os.Stat(target)
+	require.NoError(t, err)
+	assert.NotZero(t, info.Mode()&os.ModeSetuid, "setuid must survive the session chown")
+	assert.NotZero(t, info.Mode()&os.ModeSetgid, "setgid must survive the session chown")
+}
+
+// observeReader runs onFirstRead once, before delivering the payload, so a test
+// can act in the middle of a staged write.
+type observeReader struct {
+	onFirstRead func()
+	data        []byte
+	done        bool
+}
+
+func (o *observeReader) Read(p []byte) (int, error) {
+	if o.done {
+		return 0, io.EOF
+	}
+	o.done = true
+	if o.onFirstRead != nil {
+		o.onFirstRead()
+	}
+	if o.data == nil {
+		o.data = []byte("payload")
+	}
+	return copy(p, o.data), nil
+}

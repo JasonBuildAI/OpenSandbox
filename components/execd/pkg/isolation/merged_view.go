@@ -278,10 +278,10 @@ func (m *MergedView) WriteFile(path string, data []byte, perm os.FileMode) error
 	if err := os.MkdirAll(filepath.Dir(upperPath), 0o755); err != nil {
 		return err
 	}
-	if err := writeFileStaged(upperPath, data, perm, false); err != nil {
+	if err := writeFileStaged(upperPath, data, perm, false, newFileOwner(m.Uid, m.Gid)); err != nil {
 		return err
 	}
-	return os.Chown(upperPath, int(m.Uid), int(m.Gid))
+	return nil
 }
 
 // WriteFileReader writes from a reader to upper directory.
@@ -306,11 +306,7 @@ func (m *MergedView) WriteFileReader(path string, r io.Reader, perm os.FileMode)
 		return 0, err
 	}
 
-	n, err := writeReaderStaged(upperPath, r, perm, false)
-	if err != nil {
-		return n, err
-	}
-	return n, os.Chown(upperPath, int(m.Uid), int(m.Gid))
+	return writeReaderStaged(upperPath, r, perm, false, newFileOwner(m.Uid, m.Gid))
 }
 
 // Remove deletes a file. For overlay mode, creates a whiteout to hide

@@ -117,10 +117,7 @@ func (c *ConfinedView) WriteFile(path string, data []byte, perm os.FileMode) err
 			return err
 		}
 	}
-	if err := writeFileConfinedStaged(root, name, data, perm); err != nil {
-		return err
-	}
-	return c.chownNew(root, name)
+	return writeFileConfinedStaged(root, name, data, perm, newFileOwner(c.Uid, c.Gid))
 }
 
 func (c *ConfinedView) WriteFileReader(path string, r io.Reader, perm os.FileMode) (int64, error) {
@@ -138,11 +135,7 @@ func (c *ConfinedView) WriteFileReader(path string, r io.Reader, perm os.FileMod
 			return 0, err
 		}
 	}
-	n, err := writeReaderConfinedStaged(root, name, r, perm)
-	if err != nil {
-		return n, err
-	}
-	return n, c.chownNew(root, name)
+	return writeReaderConfinedStaged(root, name, r, perm, newFileOwner(c.Uid, c.Gid))
 }
 
 func (c *ConfinedView) Remove(path string) error {

@@ -106,10 +106,7 @@ func (b *BindView) WriteFile(path string, data []byte, perm os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
-	if err := writeFileStaged(p, data, perm, true); err != nil {
-		return err
-	}
-	return os.Chown(p, int(b.Uid), int(b.Gid))
+	return writeFileStaged(p, data, perm, true, newFileOwner(b.Uid, b.Gid))
 }
 
 func (b *BindView) WriteFileReader(path string, r io.Reader, perm os.FileMode) (int64, error) {
@@ -123,11 +120,7 @@ func (b *BindView) WriteFileReader(path string, r io.Reader, perm os.FileMode) (
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return 0, err
 	}
-	n, err := writeReaderStaged(p, r, perm, true)
-	if err != nil {
-		return n, err
-	}
-	return n, os.Chown(p, int(b.Uid), int(b.Gid))
+	return writeReaderStaged(p, r, perm, true, newFileOwner(b.Uid, b.Gid))
 }
 
 func (b *BindView) Remove(path string) error {
