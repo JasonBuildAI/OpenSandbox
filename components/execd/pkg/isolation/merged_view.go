@@ -73,6 +73,24 @@ func (m *MergedView) resolveLower(rel string) string {
 // refers to (bind destinations, the profile's private /tmp, etc.).
 // A LowerDir of "/" is the namespace root and contains every absolute path.
 func (m *MergedView) safePath(path string) (string, error) {
+	rel, err := m.resolveRel(path)
+	if err != nil {
+		return "", err
+	}
+	// The staging prefix is reserved for execd's own temp files, so every
+	// operation - read, stat, rename, remove - treats one as absent. A rename
+	// in particular would otherwise expose an in-flight upload under a
+	// user-visible name.
+	if err := denyStagingName(rel, path); err != nil {
+		return "", err
+	}
+	return rel, nil
+}
+
+// resolveRel validates path and returns it relative to the workspace, without
+// the staging-name check. Only the write path uses it: a staged write resolves
+// its own destination, never a staging name.
+func (m *MergedView) resolveRel(path string) (string, error) {
 	cleaned := filepath.Clean(path)
 	if filepath.IsAbs(cleaned) {
 		if m.LowerDir != "/" &&
@@ -96,13 +114,15 @@ func (m *MergedView) safePath(path string) (string, error) {
 }
 
 // denyStagingName rejects a resolved relative path whose final component is a
-// staging file, so the read and stat APIs cannot reach an in-flight or
-// orphaned temp file even when a client guesses its name.
+// staging file. The prefix is reserved, so no operation the session can invoke
+// reaches an in-flight or orphaned temp file - not a read, a stat, a rename that
+// would expose it under a user-visible name, nor a remove that would cut short a
+// concurrent upload.
 func denyStagingName(rel, path string) error {
-	if isStagingName(filepath.Base(rel)) {
-		return &os.PathError{Op: "open", Path: path, Err: fs.ErrNotExist}
+	if !isStagingName(filepath.Base(rel)) {
+		return nil
 	}
-	return nil
+	return &os.PathError{Op: "open", Path: path, Err: fs.ErrNotExist}
 }
 
 func (m *MergedView) rejectSymlink(path string) error {
@@ -156,9 +176,6 @@ func (m *MergedView) hasWhiteout(rel string) bool {
 func (m *MergedView) Stat(path string) (os.FileInfo, error) {
 	rel, err := m.safePath(path)
 	if err != nil {
-		return nil, err
-	}
-	if err := denyStagingName(rel, path); err != nil {
 		return nil, err
 	}
 
@@ -235,9 +252,6 @@ func (m *MergedView) Open(path string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := denyStagingName(rel, path); err != nil {
-		return nil, err
-	}
 
 	if m.UpperDir != "" {
 		upperPath := m.resolveUpper(rel)
@@ -258,9 +272,6 @@ func (m *MergedView) Open(path string) (*os.File, error) {
 func (m *MergedView) ReadFile(path string) ([]byte, error) {
 	rel, err := m.safePath(path)
 	if err != nil {
-		return nil, err
-	}
-	if err := denyStagingName(rel, path); err != nil {
 		return nil, err
 	}
 

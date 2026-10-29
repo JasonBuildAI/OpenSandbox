@@ -171,22 +171,20 @@ func stagedWrite(fsys stagingFS, target string, perm os.FileMode, followLink boo
 			return writeInPlace(fsys, target, existing.Mode(), owner, write)
 		}
 		// Name the destination the caller asked for, not the staging entry.
-		return 0, fmt.Errorf("stage write to %s: %w", target, err)
+		return 0, writeError(target, err)
 	}
 	committed := false
+	descriptorClosed := false
 	defer func() {
-		if committed {
+		if committed || descriptorClosed {
 			return
 		}
-		// Check ownership while the descriptor is still open: it pins the
-		// staging inode, so the allocator cannot recycle the number between
-		// the check and the unlink and make a session's fresh file look like
-		// ours. Only remove an entry this write still owns - a session that
+		// cleanupStaging checks ownership before unlinking, while the
+		// descriptor still pins the staging inode on POSIX, so the allocator
+		// cannot recycle the number and make a session's fresh file look like
+		// ours. Only an entry this write still owns is removed: a session that
 		// renamed its own file onto the name would otherwise lose it.
-		if staging.ownsEntry(fsys) {
-			_ = fsys.Remove(staging.name)
-		}
-		_ = staging.file.Close()
+		cleanupStaging(fsys, staging)
 	}()
 
 	n, err := write(staging.file)
@@ -206,19 +204,34 @@ func stagedWrite(fsys stagingFS, target string, perm os.FileMode, followLink boo
 			return n, writeError(target, err)
 		}
 	}
-	if err := verifyStagingEntry(fsys, staging); err != nil {
+	if err := verifyStagingEntry(fsys, staging, target); err != nil {
 		return n, err
 	}
 	if err := staging.file.Sync(); err != nil {
 		return n, writeError(target, err)
 	}
-	if err := staging.file.Close(); err != nil {
-		return n, writeError(target, err)
+	if closeStagingBeforeCleanup() {
+		// Windows cannot rename over or unlink an open file, so its descriptor
+		// has to go before the rename; the deferred cleanup then handles any
+		// failure below.
+		if err := staging.file.Close(); err != nil {
+			descriptorClosed = true
+			return n, writeError(target, err)
+		}
 	}
 	if err := fsys.Rename(staging.name, target); err != nil {
+		// On POSIX the descriptor is still open here, so the deferred cleanup
+		// can still prove ownership before unlinking. On Windows it is closed
+		// already and cleanupStaging reopens nothing.
 		return n, writeError(target, err)
 	}
 	committed = true
+	if !closeStagingBeforeCleanup() {
+		if err := staging.file.Close(); err != nil {
+			return n, writeError(target, err)
+		}
+		descriptorClosed = true
+	}
 
 	// Best-effort directory fsync so the renamed entry is durable and visible
 	// on weakly-coherent filesystems (virtio-fs, 9pfs, etc.). Some filesystems
@@ -232,8 +245,11 @@ func stagedWrite(fsys stagingFS, target string, perm os.FileMode, followLink boo
 func writeError(target string, err error) error {
 	var pathErr *os.PathError
 	if errors.As(err, &pathErr) {
-		pathErr.Path = target
-		return err
+		return &os.PathError{Op: pathErr.Op, Path: target, Err: pathErr.Err}
+	}
+	var linkErr *os.LinkError
+	if errors.As(err, &linkErr) {
+		return &os.LinkError{Op: linkErr.Op, Old: target, New: target, Err: linkErr.Err}
 	}
 	return fmt.Errorf("write %s: %w", target, err)
 }
@@ -280,11 +296,11 @@ func writeInPlace(fsys stagingFS, target string, perm os.FileMode, owner fileOwn
 // session that can write the destination directory can still swap the name
 // between this check and the rename, so this is not a closed hole; it turns an
 // unbounded window into two adjacent syscalls.
-func verifyStagingEntry(fsys stagingFS, staging *stagingFile) error {
+func verifyStagingEntry(fsys stagingFS, staging *stagingFile, target string) error {
 	if staging.ownsEntry(fsys) {
 		return nil
 	}
-	return fmt.Errorf("staging file %s was replaced during the write", staging.name)
+	return fmt.Errorf("write %s: the staging file was replaced during the write", target)
 }
 
 // stagingFile is an open staging inode plus the name it was created under.

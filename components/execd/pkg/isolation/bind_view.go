@@ -61,6 +61,21 @@ func NewBindView(source string, readOnly bool, uid, gid uint32) *BindView {
 }
 
 func (b *BindView) resolve(path string) (string, error) {
+	p, err := b.rawResolve(path)
+	if err != nil {
+		return "", err
+	}
+	// The staging prefix is reserved, so every operation treats one as absent:
+	// a rename would otherwise expose an in-flight upload under a user-visible
+	// name, and a remove would cut short a concurrent one.
+	if err := denyStagingName(filepath.Base(p), path); err != nil {
+		return "", err
+	}
+	return p, nil
+}
+
+// rawResolve is resolve without the staging-name check.
+func (b *BindView) rawResolve(path string) (string, error) {
 	cleaned := filepath.Clean(path)
 	// Strip the source prefix so absolute namespace paths (which may arrive
 	// with either the dest or the source prefix) resolve identically.
@@ -84,18 +99,12 @@ func (b *BindView) Stat(path string) (os.FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := denyStagingName(filepath.Base(p), path); err != nil {
-		return nil, err
-	}
 	return os.Stat(p)
 }
 
 func (b *BindView) ReadFile(path string) ([]byte, error) {
 	p, err := b.resolve(path)
 	if err != nil {
-		return nil, err
-	}
-	if err := denyStagingName(filepath.Base(p), path); err != nil {
 		return nil, err
 	}
 	return os.ReadFile(p)
@@ -209,9 +218,6 @@ func (b *BindView) ReadDir(path string) ([]os.DirEntry, error) {
 func (b *BindView) Open(path string) (*os.File, error) {
 	p, err := b.resolve(path)
 	if err != nil {
-		return nil, err
-	}
-	if err := denyStagingName(filepath.Base(p), path); err != nil {
 		return nil, err
 	}
 	return os.Open(p)

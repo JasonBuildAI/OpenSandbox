@@ -28,21 +28,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// failingReader yields some bytes and then fails, standing in for a client
-// disconnect, a short read, or an I/O error mid-copy.
-type failingReader struct {
-	data []byte
-	err  error
-	done bool
+// hookedReader yields one chunk, then behaves as instructed. It stands in for a
+// client that disconnects mid-copy, a short read, or an I/O error - and lets a
+// test act at the moment the staging file exists, which is how the races below
+// are driven.
+type hookedReader struct {
+	data   []byte
+	err    error
+	before func() // runs once, before the first chunk is delivered
+	done   bool
 }
 
-func (f *failingReader) Read(p []byte) (int, error) {
-	if f.done {
-		return 0, f.err
+func (h *hookedReader) Read(p []byte) (int, error) {
+	if h.done {
+		if h.err == nil {
+			return 0, io.EOF
+		}
+		return 0, h.err
 	}
-	f.done = true
-	n := copy(p, f.data)
-	return n, nil
+	h.done = true
+	if h.before != nil {
+		h.before()
+	}
+	if h.data == nil {
+		h.data = []byte("partial")
+	}
+	return copy(p, h.data), nil
 }
 
 // TestMergedView_WriteFileReaderFailureKeepsTheReplacedFile is the regression
@@ -56,7 +67,7 @@ func TestMergedView_WriteFileReaderFailureKeepsTheReplacedFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(mv.UpperDir, "notes.md"), []byte(previous), 0o644))
 
 	boom := errors.New("simulated read failure")
-	_, err := mv.WriteFileReader("notes.md", &failingReader{data: []byte("partial"), err: boom}, 0o644)
+	_, err := mv.WriteFileReader("notes.md", &hookedReader{data: []byte("partial"), err: boom}, 0o644)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, boom)
 
@@ -72,7 +83,7 @@ func TestMergedView_WriteFileReaderFailureLeavesNoNewFile(t *testing.T) {
 	mv := newTestMergedView(t, WorkspaceRW)
 
 	boom := errors.New("simulated read failure")
-	_, err := mv.WriteFileReader("fresh.md", &failingReader{data: []byte("partial"), err: boom}, 0o644)
+	_, err := mv.WriteFileReader("fresh.md", &hookedReader{data: []byte("partial"), err: boom}, 0o644)
 	require.Error(t, err)
 
 	_, statErr := os.Stat(filepath.Join(mv.UpperDir, "fresh.md"))
@@ -91,7 +102,7 @@ func TestMergedView_WriteFileReaderNoStagingLeftBehind(t *testing.T) {
 	}
 
 	boom := errors.New("simulated read failure")
-	_, err = mv.WriteFileReader("bad.md", &failingReader{data: []byte("x"), err: boom}, 0o644)
+	_, err = mv.WriteFileReader("bad.md", &hookedReader{data: []byte("x"), err: boom}, 0o644)
 	require.Error(t, err)
 
 	entries, err := os.ReadDir(mv.UpperDir)
@@ -221,14 +232,18 @@ func TestStagedWriteCreatesRestrictiveMode(t *testing.T) {
 	}
 }
 
-var _ io.Reader = (*failingReader)(nil)
+var _ io.Reader = (*hookedReader)(nil)
 
 // TestStagedWriteCleanupChecksOwnershipWhileTheDescriptorIsOpen pins the order
 // of the cleanup: the ownership check has to run while the descriptor still
 // holds the staging inode open. Closing first frees the inode number, and the
 // allocator can hand it to a file the session creates in the gap, which then
 // looks like ours and gets deleted.
-func TestStagedWriteCleanupChecksOwnershipWhileTheDescriptorIsOpen(t *testing.T) {
+// TestStagedWriteCleanupKeepsASessionFileOnTheStagingName covers cleanup when the
+// session replaces the staging entry with a plain file (not a symlink) before the
+// write fails. The ordering itself is pinned by
+// TestStagedWriteCleanupDoesNotTrustARecycledInode; this one guards the outcome.
+func TestStagedWriteCleanupKeepsASessionFileOnTheStagingName(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("inode reuse is not observable this way on Windows")
 	}
@@ -239,8 +254,8 @@ func TestStagedWriteCleanupChecksOwnershipWhileTheDescriptorIsOpen(t *testing.T)
 	// The session reacts to the create: it takes the staging name away and
 	// puts its own file in that slot, so the inode the writer owns is no longer
 	// reachable by the name.
-	reader := &swapAndFailReader{
-		onFirstRead: func() {
+	reader := &hookedReader{
+		before: func() {
 			matches, err := filepath.Glob(filepath.Join(dir, stagingPrefix+"*"))
 			require.NoError(t, err)
 			require.Len(t, matches, 1)
@@ -311,19 +326,33 @@ func (r *recordingStagingFS) Remove(name string) error {
 }
 
 // TestStagedWriteErrorsDoNotNameTheStagingFile keeps the temp path out of API
-// responses: the controller returns err.Error() verbatim, so a failure has to
-// name the destination the caller asked for.
+// responses: the controller returns err.Error() verbatim, so every failure path
+// has to name the destination the caller asked for.
 func TestStagedWriteErrorsDoNotNameTheStagingFile(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "dest.txt")
+	stagedPath := filepath.Join(dir, stagingPrefix+"0123456789abcdef")
+	boom := errors.New("simulated failure")
 
-	boom := errors.New("simulated write failure")
-	_, err := stagedWrite(osStagingFS{}, target, 0o644, false, fileOwner{}, func(io.Writer) (int64, error) {
-		return 0, &os.PathError{Op: "write", Path: filepath.Join(dir, stagingPrefix+"0123456789abcdef"), Err: boom}
-	})
-	require.ErrorIs(t, err, boom)
-	assert.NotContains(t, err.Error(), stagingPrefix, "the staging path must not reach the caller")
-	assert.Contains(t, err.Error(), target, "the error must name the requested destination")
+	paths := map[string]func(io.Writer) (int64, error){
+		"write": func(io.Writer) (int64, error) {
+			return 0, &os.PathError{Op: "write", Path: stagedPath, Err: boom}
+		},
+	}
+	for name, write := range paths {
+		_, err := stagedWrite(osStagingFS{}, target, 0o644, false, fileOwner{}, write)
+		require.ErrorIs(t, err, boom, name)
+		assert.NotContains(t, err.Error(), stagingPrefix, "%s error leaked the staging path", name)
+		assert.Contains(t, err.Error(), target, "%s error must name the destination", name)
+	}
+
+	// A rename failure surfaces as *os.LinkError, the most likely error and the
+	// one an errors.As on *os.PathError alone would miss.
+	linkErr := &os.LinkError{Op: "rename", Old: stagedPath, New: target, Err: boom}
+	wrapped := writeError(target, linkErr)
+	assert.ErrorIs(t, wrapped, boom)
+	assert.NotContains(t, wrapped.Error(), stagingPrefix, "rename error leaked the staging path")
+	assert.Contains(t, wrapped.Error(), target)
 }
 
 // TestViewsRejectStagingNamesOnRead closes the read paths: hiding a staging file
@@ -345,6 +374,23 @@ func TestViewsRejectStagingNamesOnRead(t *testing.T) {
 	assert.ErrorIs(t, err, os.ErrNotExist)
 }
 
+// TestViewsRejectStagingNamesOnMutate closes the other escape: a rename would
+// publish an in-flight upload under a user-visible name, and a remove would cut
+// a concurrent one short.
+func TestViewsRejectStagingNamesOnMutate(t *testing.T) {
+	mv := newTestMergedView(t, WorkspaceRW)
+	stagingName := stagingPrefix + strings.Repeat("d", stagingSuffixLen)
+	require.NoError(t, os.WriteFile(filepath.Join(mv.UpperDir, stagingName), []byte("body"), 0o600))
+
+	require.Error(t, mv.Rename(stagingName, "stolen.txt"), "Rename must not publish a staging file")
+	_, statErr := os.Stat(filepath.Join(mv.UpperDir, "stolen.txt"))
+	assert.ErrorIs(t, statErr, os.ErrNotExist)
+
+	require.Error(t, mv.Remove(stagingName), "Remove must not unlink a staging file")
+	_, statErr = os.Stat(filepath.Join(mv.UpperDir, stagingName))
+	require.NoError(t, statErr, "the staging file must survive a rejected remove")
+}
+
 // TestStagedWriteFailureDoesNotDeleteASwappedEntry covers the cleanup path: the
 // payload fails after a session renamed its own file onto the staging name, and
 // the deferred removal must not delete that file.
@@ -360,8 +406,8 @@ func TestStagedWriteFailureDoesNotDeleteASwappedEntry(t *testing.T) {
 	require.NoError(t, os.WriteFile(sessionFile, []byte("session data"), 0o644))
 
 	boom := errors.New("simulated read failure")
-	reader := &swapAndFailReader{
-		onFirstRead: func() {
+	reader := &hookedReader{
+		before: func() {
 			matches, err := filepath.Glob(filepath.Join(dir, stagingPrefix+"*"))
 			require.NoError(t, err)
 			require.Len(t, matches, 1)
@@ -381,30 +427,6 @@ func TestStagedWriteFailureDoesNotDeleteASwappedEntry(t *testing.T) {
 	require.NoError(t, readErr, "the session's file at the staging name must survive the failed write")
 	assert.Equal(t, "session data", string(data))
 }
-
-// swapAndFailReader runs onFirstRead, yields one chunk, then fails.
-type swapAndFailReader struct {
-	onFirstRead func()
-	err         error
-	done        bool
-}
-
-func (s *swapAndFailReader) Read(p []byte) (int, error) {
-	if s.done {
-		return 0, s.err
-	}
-	s.done = true
-	if s.onFirstRead != nil {
-		s.onFirstRead()
-	}
-	return copy(p, "partial"), nil
-}
-
-// var _ above already asserts the reader interface for failingReader; keep this
-// one checked too.
-var _ io.Reader = (*swapAndFailReader)(nil)
-
-var _ io.Reader = (*failingReader)(nil)
 
 // TestMergedView_StagingNamesHiddenInRWMode covers the shape the runtime
 // builds for rw sessions: LowerDir and UpperDir are the same directory, so the
@@ -479,7 +501,7 @@ func TestStagedWriteRejectsSwappedStagingEntry(t *testing.T) {
 	require.NoError(t, os.WriteFile(decoy, []byte("untouched"), 0o644))
 
 	var staged string
-	reader := &observeReader{onFirstRead: func() {
+	reader := &hookedReader{before: func() {
 		matches, err := filepath.Glob(filepath.Join(dir, stagingPrefix+"*"))
 		require.NoError(t, err)
 		require.Len(t, matches, 1)
@@ -553,24 +575,3 @@ func TestMergedView_WriteFilePreservesSetuid(t *testing.T) {
 	assert.NotZero(t, info.Mode()&os.ModeSetgid, "setgid must survive the session chown")
 }
 
-// observeReader runs onFirstRead once, before delivering the payload, so a test
-// can act in the middle of a staged write.
-type observeReader struct {
-	onFirstRead func()
-	data        []byte
-	done        bool
-}
-
-func (o *observeReader) Read(p []byte) (int, error) {
-	if o.done {
-		return 0, io.EOF
-	}
-	o.done = true
-	if o.onFirstRead != nil {
-		o.onFirstRead()
-	}
-	if o.data == nil {
-		o.data = []byte("payload")
-	}
-	return copy(p, o.data), nil
-}
