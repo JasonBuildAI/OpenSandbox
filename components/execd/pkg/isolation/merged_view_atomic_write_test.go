@@ -275,6 +275,33 @@ func TestStagedWriteCleanupKeepsASessionFileOnTheStagingName(t *testing.T) {
 	assert.Equal(t, "session slot", string(data))
 }
 
+// TestStagedWriteRenameFailureKeepsTheInodePinned drives a real rename failure
+// through stagedWrite: the message must name the destination, and on POSIX the
+// descriptor must still be open when cleanup unlinks, so the check cannot be
+// fooled by a recycled inode.
+func TestStagedWriteRenameFailureKeepsTheInodePinned(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "dest.txt")
+	renameErr := errors.New("simulated rename failure")
+
+	fsys := &recordingStagingFS{renameErr: renameErr}
+	_, err := stagedWrite(fsys, target, 0o644, false, fileOwner{}, func(w io.Writer) (int64, error) {
+		return io.Copy(w, strings.NewReader("payload"))
+	})
+	require.ErrorIs(t, err, renameErr)
+	assert.NotContains(t, err.Error(), stagingPrefix, "the rename error leaked the staging path")
+	assert.Contains(t, err.Error(), target)
+
+	if runtime.GOOS == "windows" {
+		// Windows closes the descriptor before the rename, so there is nothing
+		// left for cleanup to unlink safely; the entry is an orphan.
+		t.Skip("Windows closes the staging descriptor before the rename")
+	}
+	require.True(t, fsys.removeSeen, "cleanup never ran after a rename failure")
+	assert.True(t, fsys.descriptorOpenAtRemove,
+		"the ownership check must run while the descriptor still pins the inode")
+}
+
 // TestStagedWriteCleanupDoesNotTrustARecycledInode drives the ordering defect
 // directly: the recording filesystem observes the unlink, and asserts the
 // staging descriptor is still open at that moment. Closing first would free the
@@ -297,12 +324,20 @@ func TestStagedWriteCleanupDoesNotTrustARecycledInode(t *testing.T) {
 }
 
 // recordingStagingFS records whether the staging descriptor was still open when
-// the cleanup unlinked the name.
+// the cleanup unlinked the name, and can fail the rename.
 type recordingStagingFS struct {
 	osStagingFS
+	renameErr              error
 	removeSeen             bool
 	descriptorOpenAtRemove bool
 	stagingFile            *os.File
+}
+
+func (r *recordingStagingFS) Rename(oldName, newName string) error {
+	if r.renameErr != nil {
+		return &os.LinkError{Op: "rename", Old: oldName, New: newName, Err: r.renameErr}
+	}
+	return r.osStagingFS.Rename(oldName, newName)
 }
 
 func (r *recordingStagingFS) OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
@@ -574,4 +609,3 @@ func TestMergedView_WriteFilePreservesSetuid(t *testing.T) {
 	assert.NotZero(t, info.Mode()&os.ModeSetuid, "setuid must survive the session chown")
 	assert.NotZero(t, info.Mode()&os.ModeSetgid, "setgid must survive the session chown")
 }
-

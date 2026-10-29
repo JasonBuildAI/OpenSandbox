@@ -212,12 +212,12 @@ func stagedWrite(fsys stagingFS, target string, perm os.FileMode, followLink boo
 	}
 	if closeStagingBeforeCleanup() {
 		// Windows cannot rename over or unlink an open file, so its descriptor
-		// has to go before the rename; the deferred cleanup then handles any
-		// failure below.
+		// has to go before the rename. Mark it closed so cleanup does not close
+		// it a second time.
 		if err := staging.file.Close(); err != nil {
-			descriptorClosed = true
 			return n, writeError(target, err)
 		}
+		descriptorClosed = true
 	}
 	if err := fsys.Rename(staging.name, target); err != nil {
 		// On POSIX the descriptor is still open here, so the deferred cleanup
