@@ -106,7 +106,7 @@ func (b *BindView) WriteFile(path string, data []byte, perm os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(p, data, perm); err != nil {
+	if err := writeFileStaged(p, data, perm, true); err != nil {
 		return err
 	}
 	return os.Chown(p, int(b.Uid), int(b.Gid))
@@ -123,12 +123,7 @@ func (b *BindView) WriteFileReader(path string, r io.Reader, perm os.FileMode) (
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return 0, err
 	}
-	f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
-	if err != nil {
-		return 0, err
-	}
-	defer f.Close()
-	n, err := io.Copy(f, r)
+	n, err := writeReaderStaged(p, r, perm, true)
 	if err != nil {
 		return n, err
 	}
@@ -205,7 +200,11 @@ func (b *BindView) ReadDir(path string) ([]os.DirEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	return os.ReadDir(p)
+	entries, err := os.ReadDir(p)
+	if err != nil {
+		return nil, err
+	}
+	return hideStagingEntries(entries), nil
 }
 
 func (b *BindView) Open(path string) (*os.File, error) {
@@ -231,6 +230,9 @@ func (b *BindView) Search(root, pattern string) ([]string, error) {
 			return nil //nolint:nilerr // skip unreadable dirs
 		}
 		if d.IsDir() {
+			return nil
+		}
+		if isStagingName(d.Name()) {
 			return nil
 		}
 		rel, relErr := filepath.Rel(b.Source, p)

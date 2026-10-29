@@ -185,6 +185,9 @@ func (m *MergedView) ReadDir(path string) ([]os.DirEntry, error) {
 		var upperEntries []os.DirEntry
 		upperEntries, upperErr = os.ReadDir(m.resolveUpper(rel))
 		for _, e := range upperEntries {
+			if isStagingName(e.Name()) {
+				continue
+			}
 			if strings.HasPrefix(e.Name(), ".wh.") {
 				origName := strings.TrimPrefix(e.Name(), ".wh.")
 				delete(entryMap, origName)
@@ -275,7 +278,7 @@ func (m *MergedView) WriteFile(path string, data []byte, perm os.FileMode) error
 	if err := os.MkdirAll(filepath.Dir(upperPath), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(upperPath, data, perm); err != nil {
+	if err := writeFileStaged(upperPath, data, perm, false); err != nil {
 		return err
 	}
 	return os.Chown(upperPath, int(m.Uid), int(m.Gid))
@@ -303,13 +306,7 @@ func (m *MergedView) WriteFileReader(path string, r io.Reader, perm os.FileMode)
 		return 0, err
 	}
 
-	f, err := os.OpenFile(upperPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
-	if err != nil {
-		return 0, err
-	}
-	defer f.Close()
-
-	n, err := io.Copy(f, r)
+	n, err := writeReaderStaged(upperPath, r, perm, false)
 	if err != nil {
 		return n, err
 	}
@@ -557,6 +554,9 @@ func (m *MergedView) Search(root, pattern string) ([]string, error) { //nolint:g
 				return nil
 			}
 			if strings.HasPrefix(d.Name(), ".wh.") {
+				return nil
+			}
+			if isStagingName(d.Name()) {
 				return nil
 			}
 			rel, _ := filepath.Rel(m.UpperDir, p)

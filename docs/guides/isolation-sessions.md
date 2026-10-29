@@ -368,6 +368,8 @@ Reads and writes the session's **merged** mount view — the workspace overlays 
 
 Writes on a `ro` workspace fail; writes on `overlay` land in the upper dir and vanish on `DELETE`, and while the session runs they are not visible to `session.run` (see [Workspace Modes](#workspace-modes)); writes on a `readonly` bind fail.
 
+`files/upload` and `files/replace` stage their bytes in a private temp file next to the destination and rename it into place, so a write that fails partway — `ENOSPC`, an I/O error, execd being killed mid-copy — leaves the file it was replacing untouched. This requires write permission on the containing directory. The replacement keeps the destination's mode, including setuid/setgid/sticky bits, and, where the platform allows it, its owner and group; a symlinked destination is still written through, as the namespace sees it. Staging files are hidden from `files/search` and `directories/list`.
+
 ---
 
 ## Capabilities and Probing

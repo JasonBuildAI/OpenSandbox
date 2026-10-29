@@ -117,7 +117,7 @@ func (c *ConfinedView) WriteFile(path string, data []byte, perm os.FileMode) err
 			return err
 		}
 	}
-	if err := root.WriteFile(name, data, perm); err != nil {
+	if err := writeFileConfinedStaged(root, name, data, perm); err != nil {
 		return err
 	}
 	return c.chownNew(root, name)
@@ -138,12 +138,7 @@ func (c *ConfinedView) WriteFileReader(path string, r io.Reader, perm os.FileMod
 			return 0, err
 		}
 	}
-	f, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
-	if err != nil {
-		return 0, err
-	}
-	defer f.Close()
-	n, err := io.Copy(f, r)
+	n, err := writeReaderConfinedStaged(root, name, r, perm)
 	if err != nil {
 		return n, err
 	}
@@ -248,7 +243,11 @@ func (c *ConfinedView) ReadDir(path string) ([]os.DirEntry, error) {
 		return nil, err
 	}
 	defer f.Close()
-	return f.ReadDir(-1)
+	entries, err := f.ReadDir(-1)
+	if err != nil {
+		return nil, err
+	}
+	return hideStagingEntries(entries), nil
 }
 
 func (c *ConfinedView) Open(path string) (*os.File, error) {
@@ -285,6 +284,9 @@ func (c *ConfinedView) Search(rootPath, pattern string) ([]string, error) {
 			return nil //nolint:nilerr // skip unreadable or escaping entries
 		}
 		if d.IsDir() {
+			return nil
+		}
+		if isStagingName(d.Name()) {
 			return nil
 		}
 		if matched, _ := filepath.Match(pattern, filepath.Base(p)); matched {
