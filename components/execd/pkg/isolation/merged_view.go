@@ -65,17 +65,6 @@ func (m *MergedView) resolveLower(rel string) string {
 	return filepath.Join(m.LowerDir, rel)
 }
 
-// hideLowerStaging reports whether the lower pass of a listing has to filter
-// staging names. Only when the lower directory is the upper one (rw mode) can a
-// staging file appear there; a genuine overlay lower layer is read-only, so a
-// file that merely matches the pattern is a real user file and is kept.
-func (m *MergedView) hideLowerStaging() bool {
-	if m.UpperDir == "" {
-		return false
-	}
-	return filepath.Clean(m.LowerDir) == filepath.Clean(m.UpperDir)
-}
-
 // safePath validates and returns a path relative to the workspace.
 // Relative paths are cleaned; absolute paths must fall under LowerDir and
 // are stripped to relative — anything else is rejected with
@@ -104,6 +93,16 @@ func (m *MergedView) safePath(path string) (string, error) {
 		return "", fmt.Errorf("path traversal denied: %s", path)
 	}
 	return cleaned, nil
+}
+
+// denyStagingName rejects a resolved relative path whose final component is a
+// staging file, so the read and stat APIs cannot reach an in-flight or
+// orphaned temp file even when a client guesses its name.
+func denyStagingName(rel, path string) error {
+	if isStagingName(filepath.Base(rel)) {
+		return &os.PathError{Op: "open", Path: path, Err: fs.ErrNotExist}
+	}
+	return nil
 }
 
 func (m *MergedView) rejectSymlink(path string) error {
@@ -159,6 +158,9 @@ func (m *MergedView) Stat(path string) (os.FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := denyStagingName(rel, path); err != nil {
+		return nil, err
+	}
 
 	if m.UpperDir != "" {
 		upperPath := m.resolveUpper(rel)
@@ -184,14 +186,12 @@ func (m *MergedView) ReadDir(path string) ([]os.DirEntry, error) {
 
 	entryMap := make(map[string]os.DirEntry)
 
-	// In rw mode the upper directory *is* the workspace, so the lower pass
-	// reads the same entries the upper pass will filter; filter here too.
-	hideLowerStaging := m.hideLowerStaging()
-
-	// Lower first.
+	// Lower first. Both passes hide staging names: the prefix is reserved, and
+	// in rw mode LowerDir is UpperDir, so filtering only the upper pass would
+	// hand back the entries it just dropped.
 	lowerEntries, lowerErr := os.ReadDir(m.resolveLower(rel))
 	for _, e := range lowerEntries {
-		if hideLowerStaging && isStagingName(e.Name()) {
+		if isStagingName(e.Name()) {
 			continue
 		}
 		entryMap[e.Name()] = e
@@ -235,6 +235,9 @@ func (m *MergedView) Open(path string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := denyStagingName(rel, path); err != nil {
+		return nil, err
+	}
 
 	if m.UpperDir != "" {
 		upperPath := m.resolveUpper(rel)
@@ -255,6 +258,9 @@ func (m *MergedView) Open(path string) (*os.File, error) {
 func (m *MergedView) ReadFile(path string) ([]byte, error) {
 	rel, err := m.safePath(path)
 	if err != nil {
+		return nil, err
+	}
+	if err := denyStagingName(rel, path); err != nil {
 		return nil, err
 	}
 
@@ -537,7 +543,6 @@ func (m *MergedView) Search(root, pattern string) ([]string, error) { //nolint:g
 
 	// Walk lower.
 	if m.LowerDir != "" {
-		hideLowerStaging := m.hideLowerStaging()
 		lowerRoot := m.resolveLower(rootRel)
 		_ = filepath.WalkDir(lowerRoot, func(p string, d fs.DirEntry, err error) error {
 			if err != nil {
@@ -546,7 +551,7 @@ func (m *MergedView) Search(root, pattern string) ([]string, error) { //nolint:g
 			if d.IsDir() {
 				return nil
 			}
-			if hideLowerStaging && isStagingName(d.Name()) {
+			if isStagingName(d.Name()) {
 				return nil
 			}
 			rel, _ := filepath.Rel(m.LowerDir, p)

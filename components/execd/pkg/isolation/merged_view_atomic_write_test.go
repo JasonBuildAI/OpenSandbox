@@ -223,6 +223,128 @@ func TestStagedWriteCreatesRestrictiveMode(t *testing.T) {
 
 var _ io.Reader = (*failingReader)(nil)
 
+// TestStagedWriteCleanupChecksOwnershipWhileTheDescriptorIsOpen pins the order
+// of the cleanup: the ownership check has to run while the descriptor still
+// holds the staging inode open. Closing first frees the inode number, and the
+// allocator can hand it to a file the session creates in the gap, which then
+// looks like ours and gets deleted.
+func TestStagedWriteCleanupChecksOwnershipWhileTheDescriptorIsOpen(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("inode reuse is not observable this way on Windows")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "dest.txt")
+
+	var staged string
+	// The session reacts to the create: it takes the staging name away and
+	// puts its own file in that slot, so the inode the writer owns is no longer
+	// reachable by the name.
+	reader := &swapAndFailReader{
+		onFirstRead: func() {
+			matches, err := filepath.Glob(filepath.Join(dir, stagingPrefix+"*"))
+			require.NoError(t, err)
+			require.Len(t, matches, 1)
+			staged = matches[0]
+			require.NoError(t, os.Remove(staged))
+			require.NoError(t, os.WriteFile(staged, []byte("session slot"), 0o644))
+		},
+		err: errors.New("simulated read failure"),
+	}
+
+	_, err := writeReaderStaged(target, reader, 0o644, false, fileOwner{})
+	require.Error(t, err)
+
+	// Whatever the inode numbers look like, the session's file must be intact.
+	data, readErr := os.ReadFile(staged)
+	require.NoError(t, readErr, "cleanup deleted the session's file at the staging name")
+	assert.Equal(t, "session slot", string(data))
+}
+
+// TestStagedWriteCleanupDoesNotTrustARecycledInode drives the ordering defect
+// directly: the recording filesystem observes the unlink, and asserts the
+// staging descriptor is still open at that moment. Closing first would free the
+// inode number for a session file to take over.
+func TestStagedWriteCleanupDoesNotTrustARecycledInode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX inode semantics")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "dest.txt")
+
+	fsys := &recordingStagingFS{}
+	_, err := stagedWrite(fsys, target, 0o644, false, fileOwner{}, func(io.Writer) (int64, error) {
+		return 0, errors.New("simulated write failure")
+	})
+	require.Error(t, err)
+
+	require.True(t, fsys.removeSeen, "cleanup never ran")
+	assert.True(t, fsys.descriptorOpenAtRemove, "the ownership check must run while the descriptor still pins the inode")
+}
+
+// recordingStagingFS records whether the staging descriptor was still open when
+// the cleanup unlinked the name.
+type recordingStagingFS struct {
+	osStagingFS
+	removeSeen             bool
+	descriptorOpenAtRemove bool
+	stagingFile            *os.File
+}
+
+func (r *recordingStagingFS) OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
+	f, err := r.osStagingFS.OpenFile(name, flag, perm)
+	if err == nil && flag&os.O_EXCL != 0 {
+		r.stagingFile = f
+	}
+	return f, err
+}
+
+func (r *recordingStagingFS) Remove(name string) error {
+	if isStagingName(filepath.Base(name)) {
+		r.removeSeen = true
+		if r.stagingFile != nil {
+			// A live descriptor can still stat its own inode.
+			_, statErr := r.stagingFile.Stat()
+			r.descriptorOpenAtRemove = statErr == nil
+		}
+	}
+	return r.osStagingFS.Remove(name)
+}
+
+// TestStagedWriteErrorsDoNotNameTheStagingFile keeps the temp path out of API
+// responses: the controller returns err.Error() verbatim, so a failure has to
+// name the destination the caller asked for.
+func TestStagedWriteErrorsDoNotNameTheStagingFile(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "dest.txt")
+
+	boom := errors.New("simulated write failure")
+	_, err := stagedWrite(osStagingFS{}, target, 0o644, false, fileOwner{}, func(io.Writer) (int64, error) {
+		return 0, &os.PathError{Op: "write", Path: filepath.Join(dir, stagingPrefix+"0123456789abcdef"), Err: boom}
+	})
+	require.ErrorIs(t, err, boom)
+	assert.NotContains(t, err.Error(), stagingPrefix, "the staging path must not reach the caller")
+	assert.Contains(t, err.Error(), target, "the error must name the requested destination")
+}
+
+// TestViewsRejectStagingNamesOnRead closes the read paths: hiding a staging file
+// from listings is not enough if a client can still stat or download it by name.
+func TestViewsRejectStagingNamesOnRead(t *testing.T) {
+	mv := newTestMergedView(t, WorkspaceRW)
+	stagingName := stagingPrefix + strings.Repeat("c", stagingSuffixLen)
+	require.NoError(t, os.WriteFile(filepath.Join(mv.UpperDir, stagingName), []byte("body"), 0o600))
+
+	_, err := mv.Stat(stagingName)
+	assert.ErrorIs(t, err, os.ErrNotExist, "Stat must not reach a staging file")
+	_, err = mv.ReadFile(stagingName)
+	assert.ErrorIs(t, err, os.ErrNotExist, "ReadFile must not reach a staging file")
+	f, err := mv.Open(stagingName)
+	if err == nil {
+		_ = f.Close()
+		t.Fatal("Open must not reach a staging file")
+	}
+	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
 // TestStagedWriteFailureDoesNotDeleteASwappedEntry covers the cleanup path: the
 // payload fails after a session renamed its own file onto the staging name, and
 // the deferred removal must not delete that file.

@@ -81,6 +81,9 @@ func (c *ConfinedView) Stat(path string) (os.FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := denyStagingName(name, path); err != nil {
+		return nil, err
+	}
 	root, err := c.openRoot()
 	if err != nil {
 		return nil, err
@@ -92,6 +95,9 @@ func (c *ConfinedView) Stat(path string) (os.FileInfo, error) {
 func (c *ConfinedView) ReadFile(path string) ([]byte, error) {
 	name, err := c.rel(path)
 	if err != nil {
+		return nil, err
+	}
+	if err := denyStagingName(name, path); err != nil {
 		return nil, err
 	}
 	root, err := c.openRoot()
@@ -246,6 +252,9 @@ func (c *ConfinedView) ReadDir(path string) ([]os.DirEntry, error) {
 func (c *ConfinedView) Open(path string) (*os.File, error) {
 	name, err := c.rel(path)
 	if err != nil {
+		return nil, err
+	}
+	if err := denyStagingName(name, path); err != nil {
 		return nil, err
 	}
 	root, err := c.openRoot()

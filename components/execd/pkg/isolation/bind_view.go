@@ -84,12 +84,18 @@ func (b *BindView) Stat(path string) (os.FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := denyStagingName(filepath.Base(p), path); err != nil {
+		return nil, err
+	}
 	return os.Stat(p)
 }
 
 func (b *BindView) ReadFile(path string) ([]byte, error) {
 	p, err := b.resolve(path)
 	if err != nil {
+		return nil, err
+	}
+	if err := denyStagingName(filepath.Base(p), path); err != nil {
 		return nil, err
 	}
 	return os.ReadFile(p)
@@ -203,6 +209,9 @@ func (b *BindView) ReadDir(path string) ([]os.DirEntry, error) {
 func (b *BindView) Open(path string) (*os.File, error) {
 	p, err := b.resolve(path)
 	if err != nil {
+		return nil, err
+	}
+	if err := denyStagingName(filepath.Base(p), path); err != nil {
 		return nil, err
 	}
 	return os.Open(p)

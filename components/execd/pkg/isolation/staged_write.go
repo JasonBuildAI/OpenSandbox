@@ -178,42 +178,45 @@ func stagedWrite(fsys stagingFS, target string, perm os.FileMode, followLink boo
 		if committed {
 			return
 		}
-		_ = staging.file.Close()
-		// Only remove a staging entry this write still owns: a session that
+		// Check ownership while the descriptor is still open: it pins the
+		// staging inode, so the allocator cannot recycle the number between
+		// the check and the unlink and make a session's fresh file look like
+		// ours. Only remove an entry this write still owns - a session that
 		// renamed its own file onto the name would otherwise lose it.
 		if staging.ownsEntry(fsys) {
 			_ = fsys.Remove(staging.name)
 		}
+		_ = staging.file.Close()
 	}()
 
 	n, err := write(staging.file)
 	if err != nil {
-		return n, err
+		return n, writeError(target, err)
 	}
 	if owner.set {
 		// Ownership goes on before the mode: chown clears setuid/setgid.
 		if err := staging.file.Chown(owner.uid, owner.gid); err != nil {
-			return n, err
+			return n, writeError(target, err)
 		}
 	}
 	if statErr == nil {
 		// Restore the destination mode after the copy and after the chown, so
 		// setuid/setgid/sticky survive into the renamed inode.
 		if err := staging.file.Chmod(existing.Mode() & destinationModeMask); err != nil {
-			return n, err
+			return n, writeError(target, err)
 		}
 	}
 	if err := verifyStagingEntry(fsys, staging); err != nil {
 		return n, err
 	}
 	if err := staging.file.Sync(); err != nil {
-		return n, err
+		return n, writeError(target, err)
 	}
 	if err := staging.file.Close(); err != nil {
-		return n, err
+		return n, writeError(target, err)
 	}
 	if err := fsys.Rename(staging.name, target); err != nil {
-		return n, err
+		return n, writeError(target, err)
 	}
 	committed = true
 
@@ -222,6 +225,17 @@ func stagedWrite(fsys stagingFS, target string, perm os.FileMode, followLink boo
 	// return ENOTSUP.
 	syncDir(fsys, filepath.Dir(target))
 	return n, nil
+}
+
+// writeError reports a failed staged write against the destination the caller
+// asked for, so the staging temp file never appears in an API response.
+func writeError(target string, err error) error {
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		pathErr.Path = target
+		return err
+	}
+	return fmt.Errorf("write %s: %w", target, err)
 }
 
 // writeInPlace is the legacy path for a destination whose directory is not
@@ -313,8 +327,10 @@ func createStagingFile(fsys stagingFS, dir string, perm os.FileMode) (*stagingFi
 		if err == nil {
 			created, statErr := file.Stat()
 			if statErr != nil {
+				// Leave the entry alone rather than removing it by name: a
+				// session could have swapped the name in the meantime, and an
+				// orphaned staging file is hidden from listings anyway.
 				_ = file.Close()
-				_ = fsys.Remove(path)
 				return nil, statErr
 			}
 			return &stagingFile{file: file, name: path, created: created}, nil
