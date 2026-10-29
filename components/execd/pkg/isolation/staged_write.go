@@ -94,7 +94,13 @@ func isStagingName(name string) bool {
 	return err == nil
 }
 
+// IsStagingName reports whether name is a staged-write temp file. Callers
+// outside this package filter listings with it.
+func IsStagingName(name string) bool { return isStagingName(name) }
+
 // hideStagingEntries removes staged-write temp files from a directory listing.
+// It filters in place and returns the shortened slice, so the caller must pass
+// a slice it owns.
 func hideStagingEntries(entries []os.DirEntry) []os.DirEntry {
 	filtered := entries[:0]
 	for _, entry := range entries {
@@ -164,16 +170,18 @@ func stagedWrite(fsys stagingFS, target string, perm os.FileMode, followLink boo
 		if statErr == nil && errors.Is(err, fs.ErrPermission) {
 			return writeInPlace(fsys, target, existing.Mode(), owner, write)
 		}
-		return 0, err
+		// Name the destination the caller asked for, not the staging entry.
+		return 0, fmt.Errorf("stage write to %s: %w", target, err)
 	}
 	committed := false
-	ours := true
 	defer func() {
 		if committed {
 			return
 		}
 		_ = staging.file.Close()
-		if ours {
+		// Only remove a staging entry this write still owns: a session that
+		// renamed its own file onto the name would otherwise lose it.
+		if staging.ownsEntry(fsys) {
 			_ = fsys.Remove(staging.name)
 		}
 	}()
@@ -196,10 +204,6 @@ func stagedWrite(fsys stagingFS, target string, perm os.FileMode, followLink boo
 		}
 	}
 	if err := verifyStagingEntry(fsys, staging); err != nil {
-		// The name no longer refers to this inode, so there is nothing of ours
-		// left to clean up - and removing the name would delete whatever the
-		// session put there instead.
-		ours = false
 		return n, err
 	}
 	if err := staging.file.Sync(); err != nil {
@@ -257,23 +261,16 @@ func writeInPlace(fsys stagingFS, target string, perm os.FileMode, owner fileOwn
 	return n, nil
 }
 
-// verifyStagingEntry re-checks the staging name against the open descriptor
-// before the rename. A session can write the destination directory, so it can
-// unlink or replace the staging entry between the exclusive create and the
-// rename; the renamed inode must still be the one this write filled.
+// verifyStagingEntry narrows the swap window: it checks the staging name still
+// refers to the inode this write filled, immediately before the rename. A
+// session that can write the destination directory can still swap the name
+// between this check and the rename, so this is not a closed hole; it turns an
+// unbounded window into two adjacent syscalls.
 func verifyStagingEntry(fsys stagingFS, staging *stagingFile) error {
-	onDisk, err := fsys.Lstat(staging.name)
-	if err != nil {
-		return err
+	if staging.ownsEntry(fsys) {
+		return nil
 	}
-	opened, err := staging.file.Stat()
-	if err != nil {
-		return err
-	}
-	if !os.SameFile(onDisk, opened) {
-		return fmt.Errorf("staging file %s was replaced during the write", staging.name)
-	}
-	return nil
+	return fmt.Errorf("staging file %s was replaced during the write", staging.name)
 }
 
 // stagingFile is an open staging inode plus the name it was created under.
@@ -285,6 +282,18 @@ func verifyStagingEntry(fsys stagingFS, staging *stagingFile) error {
 type stagingFile struct {
 	file *os.File
 	name string
+	// created identifies the inode this write owns, so cleanup can tell its
+	// own staging file from one a session has since renamed onto the same name.
+	created os.FileInfo
+}
+
+// ownsEntry reports whether name still refers to this staging inode.
+func (s *stagingFile) ownsEntry(fsys stagingFS) bool {
+	onDisk, err := fsys.Lstat(s.name)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(onDisk, s.created)
 }
 
 // createStagingFile atomically creates a new staging file in dir. The caller
@@ -302,7 +311,13 @@ func createStagingFile(fsys stagingFS, dir string, perm os.FileMode) (*stagingFi
 		}
 		file, err := fsys.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
 		if err == nil {
-			return &stagingFile{file: file, name: path}, nil
+			created, statErr := file.Stat()
+			if statErr != nil {
+				_ = file.Close()
+				_ = fsys.Remove(path)
+				return nil, statErr
+			}
+			return &stagingFile{file: file, name: path, created: created}, nil
 		}
 		if !errors.Is(err, fs.ErrExist) {
 			return nil, err

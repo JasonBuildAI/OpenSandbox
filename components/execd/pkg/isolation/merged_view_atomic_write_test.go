@@ -223,11 +223,131 @@ func TestStagedWriteCreatesRestrictiveMode(t *testing.T) {
 
 var _ io.Reader = (*failingReader)(nil)
 
-// TestStagedWriteKeepsTheExclusiveDescriptor covers the create-then-reopen
-// window: the payload must go through the descriptor the exclusive create
-// returned, so a workload that unlinks and replaces the staging entry cannot
-// redirect it into another file.
-func TestStagedWriteKeepsTheExclusiveDescriptor(t *testing.T) {
+// TestStagedWriteFailureDoesNotDeleteASwappedEntry covers the cleanup path: the
+// payload fails after a session renamed its own file onto the staging name, and
+// the deferred removal must not delete that file.
+func TestStagedWriteFailureDoesNotDeleteASwappedEntry(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs a privilege on Windows")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "dest.txt")
+
+	var staged string
+	sessionFile := filepath.Join(dir, "session.bin")
+	require.NoError(t, os.WriteFile(sessionFile, []byte("session data"), 0o644))
+
+	boom := errors.New("simulated read failure")
+	reader := &swapAndFailReader{
+		onFirstRead: func() {
+			matches, err := filepath.Glob(filepath.Join(dir, stagingPrefix+"*"))
+			require.NoError(t, err)
+			require.Len(t, matches, 1)
+			staged = matches[0]
+			// Rename one of the session's own files onto the staging name, the
+			// way a workload racing the copy can.
+			require.NoError(t, os.Remove(staged))
+			require.NoError(t, os.Rename(sessionFile, staged))
+		},
+		err: boom,
+	}
+
+	_, err := writeReaderStaged(target, reader, 0o644, false, fileOwner{})
+	require.ErrorIs(t, err, boom)
+
+	data, readErr := os.ReadFile(staged)
+	require.NoError(t, readErr, "the session's file at the staging name must survive the failed write")
+	assert.Equal(t, "session data", string(data))
+}
+
+// swapAndFailReader runs onFirstRead, yields one chunk, then fails.
+type swapAndFailReader struct {
+	onFirstRead func()
+	err         error
+	done        bool
+}
+
+func (s *swapAndFailReader) Read(p []byte) (int, error) {
+	if s.done {
+		return 0, s.err
+	}
+	s.done = true
+	if s.onFirstRead != nil {
+		s.onFirstRead()
+	}
+	return copy(p, "partial"), nil
+}
+
+// var _ above already asserts the reader interface for failingReader; keep this
+// one checked too.
+var _ io.Reader = (*swapAndFailReader)(nil)
+
+var _ io.Reader = (*failingReader)(nil)
+
+// TestMergedView_StagingNamesHiddenInRWMode covers the shape the runtime
+// builds for rw sessions: LowerDir and UpperDir are the same directory, so the
+// lower pass of a listing reads the very entries the upper pass filters.
+func TestMergedView_StagingNamesHiddenInRWMode(t *testing.T) {
+	ws := filepath.Join(t.TempDir(), "ws")
+	require.NoError(t, os.MkdirAll(ws, 0o755))
+	resolved, err := filepath.EvalSymlinks(ws)
+	require.NoError(t, err)
+	mv := NewMergedView(resolved, resolved, WorkspaceRW, uint32(os.Getuid()), uint32(os.Getgid()))
+
+	require.NoError(t, os.WriteFile(filepath.Join(resolved, "real.txt"), []byte("r"), 0o644))
+	stagingName := stagingPrefix + strings.Repeat("a", stagingSuffixLen)
+	require.NoError(t, os.WriteFile(filepath.Join(resolved, stagingName), []byte("s"), 0o600))
+
+	entries, err := mv.ReadDir(".")
+	require.NoError(t, err)
+	for _, entry := range entries {
+		assert.False(t, isStagingName(entry.Name()), "rw listing leaked %s", entry.Name())
+	}
+
+	results, err := mv.Search(".", "*")
+	require.NoError(t, err)
+	for _, result := range results {
+		assert.False(t, isStagingName(filepath.Base(result)), "rw search leaked %s", result)
+	}
+}
+
+// TestStagedWriteInPlaceFallback covers the documented safety valve: when the
+// directory is not writable but the file is, the write still succeeds in place.
+// Its tradeoff - a partial failure truncates - is the documented one.
+func TestStagedWriteInPlaceFallback(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits are not meaningful on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses the permission check this test depends on")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "file.txt")
+	require.NoError(t, os.WriteFile(target, []byte("previous"), 0o666))
+	require.NoError(t, os.Chmod(target, 0o666))
+	require.NoError(t, os.Chmod(dir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	require.NoError(t, writeFileStaged(target, []byte("new content"), 0o666, false, fileOwner{}))
+
+	data, err := os.ReadFile(target)
+	require.NoError(t, err)
+	assert.Equal(t, "new content", string(data))
+
+	info, err := os.Stat(target)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o666), info.Mode().Perm(), "the in-place path keeps the destination mode")
+}
+
+// TestStagedWriteRejectsSwappedStagingEntry covers a workload that unlinks the
+// staging entry mid-copy and points its name at another file. The rename must
+// be refused rather than carrying the wrong inode into the destination.
+//
+// This is the same-entry check, not the descriptor-retention proof: a build that
+// reopened the staging name by path would also fail here, because the check
+// fires first. TestStagedWriteCreatesRestrictiveMode is what pins the
+// descriptor down.
+func TestStagedWriteRejectsSwappedStagingEntry(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation needs a privilege on Windows")
 	}
@@ -257,6 +377,11 @@ func TestStagedWriteKeepsTheExclusiveDescriptor(t *testing.T) {
 
 	_, statErr := os.Stat(target)
 	assert.ErrorIs(t, statErr, os.ErrNotExist, "the destination must not appear from a swapped staging entry")
+
+	// The name belongs to the session now, so cleanup must leave it alone.
+	linkInfo, linkErr := os.Lstat(staged)
+	require.NoError(t, linkErr)
+	assert.NotZero(t, linkInfo.Mode()&os.ModeSymlink, "cleanup must not delete the entry the session put there")
 }
 
 // TestStagedWriteRejectsNonWritableDestination keeps the permission check an
