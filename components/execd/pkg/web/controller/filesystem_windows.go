@@ -304,7 +304,7 @@ func listDirectoryEntries(root string, maxDepth int) ([]model.FileInfo, error) {
 		}
 
 		for _, entry := range dirEntries {
-			if isUploadStagingName(entry.Name()) {
+			if isAnyStagingName(entry.Name()) {
 				continue
 			}
 			entryPath := filepath.Join(dir, entry.Name())
@@ -377,7 +377,7 @@ func (c *FilesystemController) SearchFiles() {
 		if info.IsDir() {
 			return nil
 		}
-		if isUploadStagingName(info.Name()) {
+		if isAnyStagingName(info.Name()) {
 			return nil
 		}
 

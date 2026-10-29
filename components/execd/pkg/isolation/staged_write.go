@@ -227,10 +227,12 @@ func stagedWrite(fsys stagingFS, target string, perm os.FileMode, followLink boo
 	}
 	committed = true
 	if !closeStagingBeforeCleanup() {
-		if err := staging.file.Close(); err != nil {
-			return n, writeError(target, err)
-		}
+		// The content is already synced and renamed into place, so a delayed
+		// close error now describes durability of an applied write, not a
+		// failed one. Reporting it would tell the caller a mutation failed
+		// after it succeeded, and invite a retry that replaces the file again.
 		descriptorClosed = true
+		_ = staging.file.Close()
 	}
 
 	// Best-effort directory fsync so the renamed entry is durable and visible
