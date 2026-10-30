@@ -438,6 +438,10 @@ func (c *FilesystemController) ReplaceContent() {
 			c.handleFileError(err)
 			return
 		}
+		if err := rejectStagingPath(file); err != nil {
+			c.handleFileError(err)
+			return
+		}
 
 		if _, err = os.Stat(file); err != nil {
 			c.handleFileError(err)

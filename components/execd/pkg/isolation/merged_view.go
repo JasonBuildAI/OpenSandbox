@@ -87,9 +87,10 @@ func (m *MergedView) safePath(path string) (string, error) {
 	return rel, nil
 }
 
-// resolveRel validates path and returns it relative to the workspace, without
-// the staging-name check. Only the write path uses it: a staged write resolves
-// its own destination, never a staging name.
+// resolveRel validates path and returns it relative to the workspace without
+// the staging-name check. safePath layers that check on top for every public
+// operation; staged writes create their own temp name only after safePath has
+// resolved the destination.
 func (m *MergedView) resolveRel(path string) (string, error) {
 	cleaned := filepath.Clean(path)
 	if filepath.IsAbs(cleaned) {

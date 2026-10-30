@@ -276,6 +276,8 @@ func TestOrdinaryRoutesRejectIsolatedStagingNames(t *testing.T) {
 	require.False(t, isAnyStagingName("notes.md"))
 
 	require.ErrorIs(t, rejectStagingPath(staging), fs.ErrNotExist)
+	require.ErrorIs(t, rejectStagingPath(staging+string(os.PathSeparator)+"."), fs.ErrNotExist)
+	require.ErrorIs(t, rejectStagingPath(filepath.Join(dir, uploadTempPattern+"0123456789abcdef")+string(os.PathSeparator)+"."), fs.ErrNotExist)
 	require.NoError(t, rejectStagingPath(filepath.Join(dir, "notes.md")))
 }
 

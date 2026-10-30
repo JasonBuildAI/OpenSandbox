@@ -26,7 +26,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/alibaba/opensandbox/execd/pkg/isolation"
 	"github.com/alibaba/opensandbox/execd/pkg/log"
 	"github.com/alibaba/opensandbox/execd/pkg/runtime"
 	"github.com/alibaba/opensandbox/execd/pkg/vfs"
@@ -114,7 +113,7 @@ func (c *IsolatedSessionController) SearchFiles() {
 
 	files := make([]model.FileInfo, 0, len(results))
 	for _, rel := range results {
-		if isUploadStagingName(filepath.Base(rel)) || isolation.IsStagingName(filepath.Base(rel)) {
+		if isAnyStagingName(filepath.Base(rel)) {
 			continue
 		}
 		info, err := mv.Stat(rel)
@@ -541,7 +540,7 @@ func (c *IsolatedSessionController) listIsolatedDir(mv vfs.FS, root string, maxD
 			return err
 		}
 		for _, entry := range dirEntries {
-			if isUploadStagingName(entry.Name()) || isolation.IsStagingName(entry.Name()) {
+			if isAnyStagingName(entry.Name()) {
 				continue
 			}
 			entryPath := filepath.Join(dir, entry.Name())
