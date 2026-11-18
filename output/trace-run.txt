@@ -1,0 +1,7 @@
+create_minimal: ok=True requests=1 elapsed=0.0269s
+create_explicit_fields_compat_base: ok=True requests=1 elapsed=0.0042s
+create_retry_once: ok=True requests=2 elapsed=0.0622s
+create_request_timeout: ok=False requests=1 elapsed=0.3041s
+create_required_response_fields_only: ok=True requests=1 elapsed=0.0031s
+delete_flow_compat_base: ok=True requests=4 elapsed=0.0076s
+delete_404_without_code: ok=False requests=3 elapsed=0.0059s

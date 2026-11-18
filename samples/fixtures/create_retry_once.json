@@ -1,0 +1,90 @@
+{
+  "scenario": "create_retry_once",
+  "sdk_version": "2.62.1",
+  "api_url": "http://127.0.0.1:57919",
+  "evidence": "measured",
+  "ok": true,
+  "sdk_result": {
+    "sandbox_id": "sbx_trace_001",
+    "sandbox_domain": "sandbox.example.test",
+    "envd_version": "0.8.0",
+    "envd_access_token": "envd-access-token",
+    "traffic_access_token": null,
+    "envd_api_url": "https://49983-sbx_trace_001.sandbox.example.test"
+  },
+  "elapsed_seconds": 0.0622,
+  "request_count": 2,
+  "transactions": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/v2/sandboxes",
+        "headers": {
+          "accept": "*/*",
+          "accept-encoding": "gzip, deflate",
+          "lang": "python",
+          "lang_version": "3.13.18",
+          "package_version": "2.62.1",
+          "publisher": "e2b",
+          "sdk_runtime": "python",
+          "system": "Windows",
+          "user-agent": "e2b-python-sdk/2.62.1",
+          "x-api-key": "e2b_test_key",
+          "content-type": "application/json",
+          "content-length": "48",
+          "host": "127.0.0.1:57919"
+        },
+        "body": {
+          "templateID": "base",
+          "metadata": {},
+          "envVars": {}
+        }
+      },
+      "response": {
+        "status": 503,
+        "body": {
+          "code": 503,
+          "message": "retry requested by capture server"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "path": "/v2/sandboxes",
+        "headers": {
+          "accept": "*/*",
+          "accept-encoding": "gzip, deflate",
+          "lang": "python",
+          "lang_version": "3.13.18",
+          "package_version": "2.62.1",
+          "publisher": "e2b",
+          "sdk_runtime": "python",
+          "system": "Windows",
+          "user-agent": "e2b-python-sdk/2.62.1",
+          "x-api-key": "e2b_test_key",
+          "content-type": "application/json",
+          "content-length": "48",
+          "host": "127.0.0.1:57919"
+        },
+        "body": {
+          "templateID": "base",
+          "metadata": {},
+          "envVars": {}
+        }
+      },
+      "response": {
+        "status": 201,
+        "body": {
+          "templateID": "base",
+          "sandboxID": "sbx_trace_001",
+          "clientID": "client_trace",
+          "envdVersion": "0.8.0",
+          "envdAccessToken": "envd-access-token",
+          "trafficAccessToken": null,
+          "domain": "sandbox.example.test"
+        }
+      }
+    }
+  ]
+}

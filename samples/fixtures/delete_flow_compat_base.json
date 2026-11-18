@@ -1,0 +1,140 @@
+{
+  "scenario": "delete_flow_compat_base",
+  "sdk_version": "2.62.1",
+  "api_url": "http://127.0.0.1:56873/compat/e2b",
+  "evidence": "measured",
+  "ok": true,
+  "sdk_result": {
+    "sandbox": {
+      "sandbox_id": "sbx_trace_001",
+      "sandbox_domain": "sandbox.example.test",
+      "envd_version": "0.8.0",
+      "envd_access_token": "envd-access-token",
+      "traffic_access_token": null,
+      "envd_api_url": "https://49983-sbx_trace_001.sandbox.example.test"
+    },
+    "first_kill": true,
+    "repeated_kill": false,
+    "unknown_kill": false
+  },
+  "elapsed_seconds": 0.0076,
+  "request_count": 4,
+  "transactions": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/compat/e2b/v2/sandboxes",
+        "headers": {
+          "accept": "*/*",
+          "accept-encoding": "gzip, deflate",
+          "lang": "python",
+          "lang_version": "3.13.18",
+          "package_version": "2.62.1",
+          "publisher": "e2b",
+          "sdk_runtime": "python",
+          "system": "Windows",
+          "user-agent": "e2b-python-sdk/2.62.1",
+          "x-api-key": "e2b_test_key",
+          "content-type": "application/json",
+          "content-length": "58",
+          "host": "127.0.0.1:56873"
+        },
+        "body": {
+          "templateID": "trace-template",
+          "metadata": {},
+          "envVars": {}
+        }
+      },
+      "response": {
+        "status": 201,
+        "body": {
+          "templateID": "base",
+          "sandboxID": "sbx_trace_001",
+          "clientID": "client_trace",
+          "envdVersion": "0.8.0",
+          "envdAccessToken": "envd-access-token",
+          "trafficAccessToken": null,
+          "domain": "sandbox.example.test"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "DELETE",
+        "path": "/compat/e2b/sandboxes/sbx_trace_001",
+        "headers": {
+          "accept": "*/*",
+          "accept-encoding": "gzip, deflate",
+          "lang": "python",
+          "lang_version": "3.13.18",
+          "package_version": "2.62.1",
+          "publisher": "e2b",
+          "sdk_runtime": "python",
+          "system": "Windows",
+          "user-agent": "e2b-python-sdk/2.62.1",
+          "x-api-key": "e2b_test_key",
+          "host": "127.0.0.1:56873"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 204,
+        "body": null
+      }
+    },
+    {
+      "request": {
+        "method": "DELETE",
+        "path": "/compat/e2b/sandboxes/sbx_trace_001",
+        "headers": {
+          "accept": "*/*",
+          "accept-encoding": "gzip, deflate",
+          "lang": "python",
+          "lang_version": "3.13.18",
+          "package_version": "2.62.1",
+          "publisher": "e2b",
+          "sdk_runtime": "python",
+          "system": "Windows",
+          "user-agent": "e2b-python-sdk/2.62.1",
+          "x-api-key": "e2b_test_key",
+          "host": "127.0.0.1:56873"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 404,
+        "body": {
+          "code": 404,
+          "message": "Sandbox not found"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "DELETE",
+        "path": "/compat/e2b/sandboxes/sbx_missing_404",
+        "headers": {
+          "accept": "*/*",
+          "accept-encoding": "gzip, deflate",
+          "lang": "python",
+          "lang_version": "3.13.18",
+          "package_version": "2.62.1",
+          "publisher": "e2b",
+          "sdk_runtime": "python",
+          "system": "Windows",
+          "user-agent": "e2b-python-sdk/2.62.1",
+          "x-api-key": "e2b_test_key",
+          "host": "127.0.0.1:56873"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 404,
+        "body": {
+          "code": 404,
+          "message": "Sandbox not found"
+        }
+      }
+    }
+  ]
+}

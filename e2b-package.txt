@@ -1,0 +1,10 @@
+Name: e2b
+Version: 2.62.1
+Summary: E2B SDK that give agents cloud environments
+Home-page: https://e2b.dev/?utm_source=pypi&utm_medium=referral&utm_campaign=package_homepage&utm_content=e2b
+Author: e2b
+Author-email: e2b <hello@e2b.dev>
+License-Expression: MIT
+Location: D:\App\AgentProjects\opensandbox-e2b-trace\.venv\Lib\site-packages
+Requires: attrs, connectrpc, e2b-dockerfile-utils, h2, httpx, packaging, protobuf-py, pyqwest, python-dateutil, rich, typing-extensions, wcmatch
+Required-by: 
