@@ -1,7 +1,7 @@
 {
   "scenario": "create_retry_once",
   "sdk_version": "2.62.1",
-  "api_url": "http://127.0.0.1:57919",
+  "api_url": "http://127.0.0.1:50666",
   "evidence": "measured",
   "ok": true,
   "sdk_result": {
@@ -12,7 +12,7 @@
     "traffic_access_token": null,
     "envd_api_url": "https://49983-sbx_trace_001.sandbox.example.test"
   },
-  "elapsed_seconds": 0.0622,
+  "elapsed_seconds": 0.059,
   "request_count": 2,
   "transactions": [
     {
@@ -30,9 +30,10 @@
           "system": "Windows",
           "user-agent": "e2b-python-sdk/2.62.1",
           "x-api-key": "e2b_test_key",
+          "idempotency-key": "trace-retry-001",
           "content-type": "application/json",
           "content-length": "48",
-          "host": "127.0.0.1:57919"
+          "host": "127.0.0.1:50666"
         },
         "body": {
           "templateID": "base",
@@ -42,9 +43,13 @@
       },
       "response": {
         "status": 503,
+        "headers": {
+          "Content-Type": "application/json",
+          "Should-Retry": "true"
+        },
         "body": {
           "code": 503,
-          "message": "retry requested by capture server"
+          "message": "failure requested by capture server"
         }
       }
     },
@@ -63,9 +68,10 @@
           "system": "Windows",
           "user-agent": "e2b-python-sdk/2.62.1",
           "x-api-key": "e2b_test_key",
+          "idempotency-key": "trace-retry-001",
           "content-type": "application/json",
           "content-length": "48",
-          "host": "127.0.0.1:57919"
+          "host": "127.0.0.1:50666"
         },
         "body": {
           "templateID": "base",
@@ -75,6 +81,9 @@
       },
       "response": {
         "status": 201,
+        "headers": {
+          "Content-Type": "application/json"
+        },
         "body": {
           "templateID": "base",
           "sandboxID": "sbx_trace_001",

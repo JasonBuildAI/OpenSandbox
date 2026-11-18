@@ -1,7 +1,7 @@
 {
   "scenario": "delete_flow_compat_base",
   "sdk_version": "2.62.1",
-  "api_url": "http://127.0.0.1:56873/compat/e2b",
+  "api_url": "http://127.0.0.1:64066/compat/e2b",
   "evidence": "measured",
   "ok": true,
   "sdk_result": {
@@ -17,7 +17,7 @@
     "repeated_kill": false,
     "unknown_kill": false
   },
-  "elapsed_seconds": 0.0076,
+  "elapsed_seconds": 0.0097,
   "request_count": 4,
   "transactions": [
     {
@@ -37,7 +37,7 @@
           "x-api-key": "e2b_test_key",
           "content-type": "application/json",
           "content-length": "58",
-          "host": "127.0.0.1:56873"
+          "host": "127.0.0.1:64066"
         },
         "body": {
           "templateID": "trace-template",
@@ -47,6 +47,9 @@
       },
       "response": {
         "status": 201,
+        "headers": {
+          "Content-Type": "application/json"
+        },
         "body": {
           "templateID": "base",
           "sandboxID": "sbx_trace_001",
@@ -73,12 +76,15 @@
           "system": "Windows",
           "user-agent": "e2b-python-sdk/2.62.1",
           "x-api-key": "e2b_test_key",
-          "host": "127.0.0.1:56873"
+          "host": "127.0.0.1:64066"
         },
         "body": null
       },
       "response": {
         "status": 204,
+        "headers": {
+          "Content-Length": "0"
+        },
         "body": null
       }
     },
@@ -97,12 +103,15 @@
           "system": "Windows",
           "user-agent": "e2b-python-sdk/2.62.1",
           "x-api-key": "e2b_test_key",
-          "host": "127.0.0.1:56873"
+          "host": "127.0.0.1:64066"
         },
         "body": null
       },
       "response": {
         "status": 404,
+        "headers": {
+          "Content-Type": "application/json"
+        },
         "body": {
           "code": 404,
           "message": "Sandbox not found"
@@ -124,12 +133,15 @@
           "system": "Windows",
           "user-agent": "e2b-python-sdk/2.62.1",
           "x-api-key": "e2b_test_key",
-          "host": "127.0.0.1:56873"
+          "host": "127.0.0.1:64066"
         },
         "body": null
       },
       "response": {
         "status": 404,
+        "headers": {
+          "Content-Type": "application/json"
+        },
         "body": {
           "code": 404,
           "message": "Sandbox not found"

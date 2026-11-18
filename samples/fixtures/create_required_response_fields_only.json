@@ -1,7 +1,7 @@
 {
   "scenario": "create_required_response_fields_only",
   "sdk_version": "2.62.1",
-  "api_url": "http://127.0.0.1:54248",
+  "api_url": "http://127.0.0.1:53686",
   "evidence": "measured",
   "ok": true,
   "sdk_result": {
@@ -12,7 +12,7 @@
     "traffic_access_token": null,
     "envd_api_url": "https://sandbox.e2b.app"
   },
-  "elapsed_seconds": 0.0031,
+  "elapsed_seconds": 0.0037,
   "request_count": 1,
   "transactions": [
     {
@@ -32,7 +32,7 @@
           "x-api-key": "e2b_test_key",
           "content-type": "application/json",
           "content-length": "48",
-          "host": "127.0.0.1:54248"
+          "host": "127.0.0.1:53686"
         },
         "body": {
           "templateID": "base",
@@ -42,6 +42,9 @@
       },
       "response": {
         "status": 201,
+        "headers": {
+          "Content-Type": "application/json"
+        },
         "body": {
           "templateID": "base",
           "sandboxID": "sbx_trace_001",

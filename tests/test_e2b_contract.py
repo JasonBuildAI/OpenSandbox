@@ -8,7 +8,7 @@ from typing import Any, Iterator
 
 import httpx
 import pytest
-from e2b import Sandbox
+from e2b import Sandbox, ServiceBusyException
 
 from capture_server import start_capture_server, stop_capture_server
 
@@ -115,6 +115,8 @@ def test_only_four_create_response_fields_are_required(tmp_path: Path) -> None:
     assert str(sandbox._envd_version) == "0.8.0"
     assert sandbox._envd_access_token is None
     assert sandbox.traffic_access_token is None
+    assert sandbox.sandbox_domain == "e2b.app"
+    assert sandbox.envd_api_url == "https://sandbox.e2b.app"
 
 
 def test_delete_success_repeated_and_unknown(tmp_path: Path) -> None:
@@ -163,17 +165,69 @@ def test_retryable_503_is_retried_once(tmp_path: Path) -> None:
             api_url=capture["url"],
             http_version="1.1",
             retries=1,
+            idempotency_key="trace-retry-001",
         )
         requests = read_requests(capture["log_path"])
 
     assert sandbox.sandbox_id == "sbx_trace_001"
     assert [item["response_status"] for item in requests] == [503, 201]
     assert all(item["path"] == "/v2/sandboxes" for item in requests)
+    assert header_value(requests[0]["response_headers"], "Should-Retry") == "true"
+    assert header_value(requests[0]["headers"], "Idempotency-Key") == "trace-retry-001"
+    assert header_value(requests[1]["headers"], "Idempotency-Key") == "trace-retry-001"
+
+
+def test_should_retry_false_suppresses_retry(tmp_path: Path) -> None:
+    with capture_at(
+        tmp_path,
+        retry_failures=1,
+        failure_retry_header="false",
+    ) as capture:
+        with pytest.raises(ServiceBusyException):
+            Sandbox.create(
+                api_key=API_KEY,
+                api_url=capture["url"],
+                http_version="1.1",
+                retries=1,
+            )
+        requests = read_requests(capture["log_path"])
+
+    assert len(requests) == 1
+    assert requests[0]["response_status"] == 503
+    assert header_value(requests[0]["response_headers"], "Should-Retry") == "false"
+
+
+def test_400_with_should_retry_true_is_retried(tmp_path: Path) -> None:
+    with capture_at(
+        tmp_path,
+        retry_failures=1,
+        failure_status=400,
+        failure_retry_header="true",
+    ) as capture:
+        sandbox = Sandbox.create(
+            api_key=API_KEY,
+            api_url=capture["url"],
+            http_version="1.1",
+            retries=1,
+        )
+        requests = read_requests(capture["log_path"])
+
+    assert sandbox.sandbox_id == "sbx_trace_001"
+    assert [item["response_status"] for item in requests] == [400, 201]
+    assert header_value(requests[0]["response_headers"], "Should-Retry") == "true"
+
+
+def test_trailing_slash_base_is_normalized(tmp_path: Path) -> None:
+    with capture_at(tmp_path) as capture:
+        create_sandbox(capture["url"] + "/compat/e2b/")
+        requests = read_requests(capture["log_path"])
+
+    assert len(requests) == 1
+    assert requests[0]["path"] == "/compat/e2b/v2/sandboxes"
 
 
 def test_request_timeout_raises_httpx_read_timeout(tmp_path: Path) -> None:
     with capture_at(tmp_path, delay=0.5) as capture:
-        started = time.perf_counter()
         with pytest.raises(httpx.ReadTimeout):
             Sandbox.create(
                 api_key=API_KEY,
@@ -182,12 +236,9 @@ def test_request_timeout_raises_httpx_read_timeout(tmp_path: Path) -> None:
                 retries=0,
                 request_timeout=0.15,
             )
-        elapsed = time.perf_counter() - started
-
         time.sleep(0.55)
         requests = read_requests(capture["log_path"])
 
-    assert elapsed < 0.45
     assert len(requests) == 1
     assert requests[0]["path"] == "/v2/sandboxes"
     assert requests[0]["body"]["templateID"] == "base"

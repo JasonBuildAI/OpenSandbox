@@ -1,7 +1,7 @@
 {
   "scenario": "create_explicit_fields_compat_base",
   "sdk_version": "2.62.1",
-  "api_url": "http://127.0.0.1:56419/compat/e2b",
+  "api_url": "http://127.0.0.1:51223/compat/e2b",
   "evidence": "measured",
   "ok": true,
   "sdk_result": {
@@ -12,7 +12,7 @@
     "traffic_access_token": null,
     "envd_api_url": "https://49983-sbx_trace_001.sandbox.example.test"
   },
-  "elapsed_seconds": 0.0042,
+  "elapsed_seconds": 0.0039,
   "request_count": 1,
   "transactions": [
     {
@@ -33,7 +33,7 @@
           "idempotency-key": "trace-create-001",
           "content-type": "application/json",
           "content-length": "135",
-          "host": "127.0.0.1:56419"
+          "host": "127.0.0.1:51223"
         },
         "body": {
           "templateID": "trace-template",
@@ -50,6 +50,9 @@
       },
       "response": {
         "status": 201,
+        "headers": {
+          "Content-Type": "application/json"
+        },
         "body": {
           "templateID": "base",
           "sandboxID": "sbx_trace_001",

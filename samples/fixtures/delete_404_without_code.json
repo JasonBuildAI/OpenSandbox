@@ -1,7 +1,7 @@
 {
   "scenario": "delete_404_without_code",
   "sdk_version": "2.62.1",
-  "api_url": "http://127.0.0.1:56875",
+  "api_url": "http://127.0.0.1:56928",
   "evidence": "measured",
   "ok": false,
   "exception": {
@@ -9,7 +9,7 @@
     "module": "builtins",
     "message": "'code'"
   },
-  "elapsed_seconds": 0.0059,
+  "elapsed_seconds": 0.0074,
   "request_count": 3,
   "transactions": [
     {
@@ -29,7 +29,7 @@
           "x-api-key": "e2b_test_key",
           "content-type": "application/json",
           "content-length": "48",
-          "host": "127.0.0.1:56875"
+          "host": "127.0.0.1:56928"
         },
         "body": {
           "templateID": "base",
@@ -39,6 +39,9 @@
       },
       "response": {
         "status": 201,
+        "headers": {
+          "Content-Type": "application/json"
+        },
         "body": {
           "templateID": "base",
           "sandboxID": "sbx_trace_001",
@@ -65,12 +68,15 @@
           "system": "Windows",
           "user-agent": "e2b-python-sdk/2.62.1",
           "x-api-key": "e2b_test_key",
-          "host": "127.0.0.1:56875"
+          "host": "127.0.0.1:56928"
         },
         "body": null
       },
       "response": {
         "status": 204,
+        "headers": {
+          "Content-Length": "0"
+        },
         "body": null
       }
     },
@@ -89,12 +95,15 @@
           "system": "Windows",
           "user-agent": "e2b-python-sdk/2.62.1",
           "x-api-key": "e2b_test_key",
-          "host": "127.0.0.1:56875"
+          "host": "127.0.0.1:56928"
         },
         "body": null
       },
       "response": {
         "status": 404,
+        "headers": {
+          "Content-Type": "application/json"
+        },
         "body": {
           "message": "Sandbox not found"
         }

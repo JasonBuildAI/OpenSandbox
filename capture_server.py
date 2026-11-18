@@ -21,12 +21,16 @@ class CaptureState:
         *,
         valid_error_body: bool = True,
         include_optional_response_fields: bool = True,
+        failure_status: int = 503,
+        failure_retry_header: str | None = "true",
     ):
         self.log_path = log_path
         self.retry_failures = retry_failures
         self.delay = delay
         self.valid_error_body = valid_error_body
         self.include_optional_response_fields = include_optional_response_fields
+        self.failure_status = failure_status
+        self.failure_retry_header = failure_retry_header
         self.sandboxes: set[str] = set()
         self.next_id = 1
         self.lock = threading.Lock()
@@ -62,7 +66,13 @@ class CaptureHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         return self.rfile.read(length) if length else b""
 
-    def _record(self, body: bytes, status: int, response_body: Any) -> None:
+    def _record(
+        self,
+        body: bytes,
+        status: int,
+        response_body: Any,
+        response_headers: dict[str, str] | None = None,
+    ) -> None:
         try:
             decoded_body: Any = json.loads(body.decode("utf-8")) if body else None
         except Exception:
@@ -74,6 +84,7 @@ class CaptureHandler(BaseHTTPRequestHandler):
             "headers": dict(self.headers.items()),
             "body": decoded_body,
             "response_status": status,
+            "response_headers": response_headers or {},
             "response_body": response_body,
         }
         with self.state.lock:
@@ -125,8 +136,10 @@ class CaptureHandler(BaseHTTPRequestHandler):
 
         route = self._route_key(urlparse(self.path).path)
         if route != "/v2/sandboxes":
-            self._record(body, 404, {"message": "not found"})
-            self._send_json(404, {"message": "not found"})
+            response = self._error_body(404, "not found")
+            response_headers = {"Content-Type": "application/json"}
+            self._record(body, 404, response, response_headers)
+            self._send_json(404, response)
             return
 
         with self.state.lock:
@@ -137,9 +150,21 @@ class CaptureHandler(BaseHTTPRequestHandler):
                 should_retry = False
 
         if should_retry:
-            response = self._error_body(503, "retry requested by capture server")
-            self._record(body, 503, response)
-            self._send_json(503, response, {"Should-Retry": "true"})
+            response = self._error_body(
+                self.state.failure_status,
+                "failure requested by capture server",
+            )
+            extra_headers: dict[str, str] = {}
+            if self.state.failure_retry_header is not None:
+                extra_headers["Should-Retry"] = self.state.failure_retry_header
+            response_headers = {"Content-Type": "application/json", **extra_headers}
+            self._record(
+                body,
+                self.state.failure_status,
+                response,
+                response_headers,
+            )
+            self._send_json(self.state.failure_status, response, extra_headers)
             return
 
         with self.state.lock:
@@ -161,7 +186,12 @@ class CaptureHandler(BaseHTTPRequestHandler):
                     "domain": "sandbox.example.test",
                 }
             )
-        self._record(body, 201, response)
+        self._record(
+            body,
+            201,
+            response,
+            {"Content-Type": "application/json"},
+        )
         self._send_json(201, response)
 
     def do_DELETE(self) -> None:
@@ -172,7 +202,12 @@ class CaptureHandler(BaseHTTPRequestHandler):
 
         if not sandbox_id:
             response = self._error_body(404, "not found")
-            self._record(body, 404, response)
+            self._record(
+                body,
+                404,
+                response,
+                {"Content-Type": "application/json"},
+            )
             self._send_json(404, response)
             return
 
@@ -182,20 +217,35 @@ class CaptureHandler(BaseHTTPRequestHandler):
                 self.state.sandboxes.remove(sandbox_id)
 
         if existed:
-            self._record(body, 204, None)
+            self._record(body, 204, None, {"Content-Length": "0"})
             self._send_empty(204)
         else:
             response = self._error_body(404, "Sandbox not found")
-            self._record(body, 404, response)
+            self._record(
+                body,
+                404,
+                response,
+                {"Content-Type": "application/json"},
+            )
             self._send_json(404, response)
 
     def do_GET(self) -> None:
         if urlparse(self.path).path.endswith("/healthz"):
-            self._record(b"", 200, {"status": "ok"})
+            self._record(
+                b"",
+                200,
+                {"status": "ok"},
+                {"Content-Type": "application/json"},
+            )
             self._send_json(200, {"status": "ok"})
         else:
             response = self._error_body(404, "not found")
-            self._record(b"", 404, response)
+            self._record(
+                b"",
+                404,
+                response,
+                {"Content-Type": "application/json"},
+            )
             self._send_json(404, response)
 
 
@@ -207,6 +257,8 @@ def start_capture_server(
     delay: float = 0.0,
     valid_error_body: bool = True,
     include_optional_response_fields: bool = True,
+    failure_status: int = 503,
+    failure_retry_header: str | None = "true",
 ) -> tuple[CaptureServer, threading.Thread, str]:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_path.write_text("", encoding="utf-8")
@@ -216,6 +268,8 @@ def start_capture_server(
         delay=delay,
         valid_error_body=valid_error_body,
         include_optional_response_fields=include_optional_response_fields,
+        failure_status=failure_status,
+        failure_retry_header=failure_retry_header,
     )
     server = CaptureServer(("127.0.0.1", port), state)
     thread = threading.Thread(target=server.serve_forever, daemon=True)

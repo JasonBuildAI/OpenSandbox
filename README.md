@@ -3,6 +3,11 @@
 This directory contains local, reproducible evidence for the Python SDK create
 and delete contract. It does not implement or validate E2B compatibility.
 
+The recorded environment is Python 3.13.18 on Windows. The SDK's connection
+retry count is read when `e2b` is imported, so the runner scripts set
+`E2B_CONNECTION_RETRIES=0` before importing it. `pytest` does the same in
+`tests/conftest.py`.
+
 ## Reproduce
 
 ```powershell
@@ -18,7 +23,7 @@ python -m venv .venv
 ## Main artifacts
 
 - `output/contract-e2b-2.62.1.md`: issue-ready review report.
-- `tests/test_e2b_contract.py`: seven runnable contract tests.
+- `tests/test_e2b_contract.py`: ten runnable contract tests.
 - `capture_server.py`: local control-plane stub.
 - `samples/fixtures/`: request/response pairs with SDK observations.
 

@@ -1,0 +1,53 @@
+{
+  "scenario": "create_retry_suppressed_by_header",
+  "sdk_version": "2.62.1",
+  "api_url": "http://127.0.0.1:64049",
+  "evidence": "measured",
+  "ok": false,
+  "exception": {
+    "type": "ServiceBusyException",
+    "module": "e2b.exceptions",
+    "message": "503: Service temporarily unavailable, please retry. - failure requested by capture server"
+  },
+  "elapsed_seconds": 0.0039,
+  "request_count": 1,
+  "transactions": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/v2/sandboxes",
+        "headers": {
+          "accept": "*/*",
+          "accept-encoding": "gzip, deflate",
+          "lang": "python",
+          "lang_version": "3.13.18",
+          "package_version": "2.62.1",
+          "publisher": "e2b",
+          "sdk_runtime": "python",
+          "system": "Windows",
+          "user-agent": "e2b-python-sdk/2.62.1",
+          "x-api-key": "e2b_test_key",
+          "content-type": "application/json",
+          "content-length": "48",
+          "host": "127.0.0.1:64049"
+        },
+        "body": {
+          "templateID": "base",
+          "metadata": {},
+          "envVars": {}
+        }
+      },
+      "response": {
+        "status": 503,
+        "headers": {
+          "Content-Type": "application/json",
+          "Should-Retry": "false"
+        },
+        "body": {
+          "code": 503,
+          "message": "failure requested by capture server"
+        }
+      }
+    }
+  ]
+}

@@ -1,15 +1,15 @@
 {
   "scenario": "create_request_timeout",
   "sdk_version": "2.62.1",
-  "api_url": "http://127.0.0.1:50078",
+  "api_url": "http://127.0.0.1:63664",
   "evidence": "measured",
   "ok": false,
   "exception": {
     "type": "ReadTimeout",
     "module": "httpx",
-    "message": "Request failed: error sending request for url (http://127.0.0.1:50078/v2/sandboxes): operation timed out"
+    "message": "Request failed: error sending request for url (http://127.0.0.1:63664/v2/sandboxes): operation timed out"
   },
-  "elapsed_seconds": 0.3041,
+  "elapsed_seconds": 0.3037,
   "request_count": 1,
   "transactions": [
     {
@@ -29,7 +29,7 @@
           "x-api-key": "e2b_test_key",
           "content-type": "application/json",
           "content-length": "48",
-          "host": "127.0.0.1:50078"
+          "host": "127.0.0.1:63664"
         },
         "body": {
           "templateID": "base",
@@ -39,6 +39,9 @@
       },
       "response": {
         "status": 201,
+        "headers": {
+          "Content-Type": "application/json"
+        },
         "body": {
           "templateID": "base",
           "sandboxID": "sbx_trace_001",

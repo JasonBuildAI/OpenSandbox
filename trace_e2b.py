@@ -7,12 +7,16 @@ a local stub and does not prove that a real Fast Sandbox accepts these requests.
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any, Callable
 
 from capture_server import start_capture_server, stop_capture_server
-from e2b import Sandbox
+
+os.environ.setdefault("E2B_CONNECTION_RETRIES", "0")
+
+from e2b import Sandbox  # noqa: E402 - env must be set before importing the SDK
 
 
 ROOT = Path(__file__).resolve().parent
@@ -63,6 +67,8 @@ def _run_case(
     delay: float = 0.0,
     valid_error_body: bool = True,
     include_optional_response_fields: bool = True,
+    failure_status: int = 503,
+    failure_retry_header: str | None = "true",
 ) -> dict[str, Any]:
     log_path = RAW / f"{name}.jsonl"
     server, thread, root_url = start_capture_server(
@@ -71,6 +77,8 @@ def _run_case(
         delay=delay,
         valid_error_body=valid_error_body,
         include_optional_response_fields=include_optional_response_fields,
+        failure_status=failure_status,
+        failure_retry_header=failure_retry_header,
     )
     api_url = root_url + base_path
     started = time.perf_counter()
@@ -110,6 +118,7 @@ def _run_case(
             },
             "response": {
                 "status": record["response_status"],
+                "headers": record.get("response_headers", {}),
                 "body": record["response_body"],
             },
         }
@@ -158,9 +167,43 @@ def capture() -> list[dict[str, Any]]:
                     api_url=base,
                     http_version="1.1",
                     retries=1,
+                    idempotency_key="trace-retry-001",
                 )
             ),
             retry_failures=1,
+        )
+    )
+
+    cases.append(
+        _run_case(
+            "create_retry_suppressed_by_header",
+            lambda base: _sandbox_view(
+                Sandbox.create(
+                    api_key="e2b_test_key",
+                    api_url=base,
+                    http_version="1.1",
+                    retries=1,
+                )
+            ),
+            retry_failures=1,
+            failure_retry_header="false",
+        )
+    )
+
+    cases.append(
+        _run_case(
+            "create_retry_on_400",
+            lambda base: _sandbox_view(
+                Sandbox.create(
+                    api_key="e2b_test_key",
+                    api_url=base,
+                    http_version="1.1",
+                    retries=1,
+                )
+            ),
+            retry_failures=1,
+            failure_status=400,
+            failure_retry_header="true",
         )
     )
 
@@ -185,6 +228,14 @@ def capture() -> list[dict[str, Any]]:
             "create_required_response_fields_only",
             lambda base: _sandbox_view(_sdk_create(base)),
             include_optional_response_fields=False,
+        )
+    )
+
+    cases.append(
+        _run_case(
+            "create_trailing_slash_base",
+            lambda base: _sandbox_view(_sdk_create(base)),
+            base_path="/compat/e2b/",
         )
     )
 

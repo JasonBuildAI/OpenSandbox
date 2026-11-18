@@ -5,7 +5,7 @@
     {
       "scenario": "create_minimal",
       "sdk_version": "2.62.1",
-      "api_url": "http://127.0.0.1:56415",
+      "api_url": "http://127.0.0.1:51219",
       "evidence": "measured",
       "ok": true,
       "sdk_result": {
@@ -16,7 +16,7 @@
         "traffic_access_token": null,
         "envd_api_url": "https://49983-sbx_trace_001.sandbox.example.test"
       },
-      "elapsed_seconds": 0.0269,
+      "elapsed_seconds": 0.0329,
       "request_count": 1,
       "transactions": [
         {
@@ -36,7 +36,7 @@
               "x-api-key": "e2b_test_key",
               "content-type": "application/json",
               "content-length": "48",
-              "host": "127.0.0.1:56415"
+              "host": "127.0.0.1:51219"
             },
             "body": {
               "templateID": "base",
@@ -46,6 +46,9 @@
           },
           "response": {
             "status": 201,
+            "headers": {
+              "Content-Type": "application/json"
+            },
             "body": {
               "templateID": "base",
               "sandboxID": "sbx_trace_001",
@@ -62,7 +65,7 @@
     {
       "scenario": "create_explicit_fields_compat_base",
       "sdk_version": "2.62.1",
-      "api_url": "http://127.0.0.1:56419/compat/e2b",
+      "api_url": "http://127.0.0.1:51223/compat/e2b",
       "evidence": "measured",
       "ok": true,
       "sdk_result": {
@@ -73,7 +76,7 @@
         "traffic_access_token": null,
         "envd_api_url": "https://49983-sbx_trace_001.sandbox.example.test"
       },
-      "elapsed_seconds": 0.0042,
+      "elapsed_seconds": 0.0039,
       "request_count": 1,
       "transactions": [
         {
@@ -94,7 +97,7 @@
               "idempotency-key": "trace-create-001",
               "content-type": "application/json",
               "content-length": "135",
-              "host": "127.0.0.1:56419"
+              "host": "127.0.0.1:51223"
             },
             "body": {
               "templateID": "trace-template",
@@ -111,6 +114,9 @@
           },
           "response": {
             "status": 201,
+            "headers": {
+              "Content-Type": "application/json"
+            },
             "body": {
               "templateID": "base",
               "sandboxID": "sbx_trace_001",
@@ -127,7 +133,7 @@
     {
       "scenario": "create_retry_once",
       "sdk_version": "2.62.1",
-      "api_url": "http://127.0.0.1:57919",
+      "api_url": "http://127.0.0.1:50666",
       "evidence": "measured",
       "ok": true,
       "sdk_result": {
@@ -138,7 +144,159 @@
         "traffic_access_token": null,
         "envd_api_url": "https://49983-sbx_trace_001.sandbox.example.test"
       },
-      "elapsed_seconds": 0.0622,
+      "elapsed_seconds": 0.059,
+      "request_count": 2,
+      "transactions": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v2/sandboxes",
+            "headers": {
+              "accept": "*/*",
+              "accept-encoding": "gzip, deflate",
+              "lang": "python",
+              "lang_version": "3.13.18",
+              "package_version": "2.62.1",
+              "publisher": "e2b",
+              "sdk_runtime": "python",
+              "system": "Windows",
+              "user-agent": "e2b-python-sdk/2.62.1",
+              "x-api-key": "e2b_test_key",
+              "idempotency-key": "trace-retry-001",
+              "content-type": "application/json",
+              "content-length": "48",
+              "host": "127.0.0.1:50666"
+            },
+            "body": {
+              "templateID": "base",
+              "metadata": {},
+              "envVars": {}
+            }
+          },
+          "response": {
+            "status": 503,
+            "headers": {
+              "Content-Type": "application/json",
+              "Should-Retry": "true"
+            },
+            "body": {
+              "code": 503,
+              "message": "failure requested by capture server"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v2/sandboxes",
+            "headers": {
+              "accept": "*/*",
+              "accept-encoding": "gzip, deflate",
+              "lang": "python",
+              "lang_version": "3.13.18",
+              "package_version": "2.62.1",
+              "publisher": "e2b",
+              "sdk_runtime": "python",
+              "system": "Windows",
+              "user-agent": "e2b-python-sdk/2.62.1",
+              "x-api-key": "e2b_test_key",
+              "idempotency-key": "trace-retry-001",
+              "content-type": "application/json",
+              "content-length": "48",
+              "host": "127.0.0.1:50666"
+            },
+            "body": {
+              "templateID": "base",
+              "metadata": {},
+              "envVars": {}
+            }
+          },
+          "response": {
+            "status": 201,
+            "headers": {
+              "Content-Type": "application/json"
+            },
+            "body": {
+              "templateID": "base",
+              "sandboxID": "sbx_trace_001",
+              "clientID": "client_trace",
+              "envdVersion": "0.8.0",
+              "envdAccessToken": "envd-access-token",
+              "trafficAccessToken": null,
+              "domain": "sandbox.example.test"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "scenario": "create_retry_suppressed_by_header",
+      "sdk_version": "2.62.1",
+      "api_url": "http://127.0.0.1:64049",
+      "evidence": "measured",
+      "ok": false,
+      "exception": {
+        "type": "ServiceBusyException",
+        "module": "e2b.exceptions",
+        "message": "503: Service temporarily unavailable, please retry. - failure requested by capture server"
+      },
+      "elapsed_seconds": 0.0039,
+      "request_count": 1,
+      "transactions": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v2/sandboxes",
+            "headers": {
+              "accept": "*/*",
+              "accept-encoding": "gzip, deflate",
+              "lang": "python",
+              "lang_version": "3.13.18",
+              "package_version": "2.62.1",
+              "publisher": "e2b",
+              "sdk_runtime": "python",
+              "system": "Windows",
+              "user-agent": "e2b-python-sdk/2.62.1",
+              "x-api-key": "e2b_test_key",
+              "content-type": "application/json",
+              "content-length": "48",
+              "host": "127.0.0.1:64049"
+            },
+            "body": {
+              "templateID": "base",
+              "metadata": {},
+              "envVars": {}
+            }
+          },
+          "response": {
+            "status": 503,
+            "headers": {
+              "Content-Type": "application/json",
+              "Should-Retry": "false"
+            },
+            "body": {
+              "code": 503,
+              "message": "failure requested by capture server"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "scenario": "create_retry_on_400",
+      "sdk_version": "2.62.1",
+      "api_url": "http://127.0.0.1:63662",
+      "evidence": "measured",
+      "ok": true,
+      "sdk_result": {
+        "sandbox_id": "sbx_trace_001",
+        "sandbox_domain": "sandbox.example.test",
+        "envd_version": "0.8.0",
+        "envd_access_token": "envd-access-token",
+        "traffic_access_token": null,
+        "envd_api_url": "https://49983-sbx_trace_001.sandbox.example.test"
+      },
+      "elapsed_seconds": 0.1033,
       "request_count": 2,
       "transactions": [
         {
@@ -158,7 +316,7 @@
               "x-api-key": "e2b_test_key",
               "content-type": "application/json",
               "content-length": "48",
-              "host": "127.0.0.1:57919"
+              "host": "127.0.0.1:63662"
             },
             "body": {
               "templateID": "base",
@@ -167,10 +325,14 @@
             }
           },
           "response": {
-            "status": 503,
+            "status": 400,
+            "headers": {
+              "Content-Type": "application/json",
+              "Should-Retry": "true"
+            },
             "body": {
-              "code": 503,
-              "message": "retry requested by capture server"
+              "code": 400,
+              "message": "failure requested by capture server"
             }
           }
         },
@@ -191,7 +353,7 @@
               "x-api-key": "e2b_test_key",
               "content-type": "application/json",
               "content-length": "48",
-              "host": "127.0.0.1:57919"
+              "host": "127.0.0.1:63662"
             },
             "body": {
               "templateID": "base",
@@ -201,6 +363,9 @@
           },
           "response": {
             "status": 201,
+            "headers": {
+              "Content-Type": "application/json"
+            },
             "body": {
               "templateID": "base",
               "sandboxID": "sbx_trace_001",
@@ -217,15 +382,15 @@
     {
       "scenario": "create_request_timeout",
       "sdk_version": "2.62.1",
-      "api_url": "http://127.0.0.1:50078",
+      "api_url": "http://127.0.0.1:63664",
       "evidence": "measured",
       "ok": false,
       "exception": {
         "type": "ReadTimeout",
         "module": "httpx",
-        "message": "Request failed: error sending request for url (http://127.0.0.1:50078/v2/sandboxes): operation timed out"
+        "message": "Request failed: error sending request for url (http://127.0.0.1:63664/v2/sandboxes): operation timed out"
       },
-      "elapsed_seconds": 0.3041,
+      "elapsed_seconds": 0.3037,
       "request_count": 1,
       "transactions": [
         {
@@ -245,7 +410,7 @@
               "x-api-key": "e2b_test_key",
               "content-type": "application/json",
               "content-length": "48",
-              "host": "127.0.0.1:50078"
+              "host": "127.0.0.1:63664"
             },
             "body": {
               "templateID": "base",
@@ -255,6 +420,9 @@
           },
           "response": {
             "status": 201,
+            "headers": {
+              "Content-Type": "application/json"
+            },
             "body": {
               "templateID": "base",
               "sandboxID": "sbx_trace_001",
@@ -271,7 +439,7 @@
     {
       "scenario": "create_required_response_fields_only",
       "sdk_version": "2.62.1",
-      "api_url": "http://127.0.0.1:54248",
+      "api_url": "http://127.0.0.1:53686",
       "evidence": "measured",
       "ok": true,
       "sdk_result": {
@@ -282,7 +450,7 @@
         "traffic_access_token": null,
         "envd_api_url": "https://sandbox.e2b.app"
       },
-      "elapsed_seconds": 0.0031,
+      "elapsed_seconds": 0.0037,
       "request_count": 1,
       "transactions": [
         {
@@ -302,7 +470,7 @@
               "x-api-key": "e2b_test_key",
               "content-type": "application/json",
               "content-length": "48",
-              "host": "127.0.0.1:54248"
+              "host": "127.0.0.1:53686"
             },
             "body": {
               "templateID": "base",
@@ -312,6 +480,9 @@
           },
           "response": {
             "status": 201,
+            "headers": {
+              "Content-Type": "application/json"
+            },
             "body": {
               "templateID": "base",
               "sandboxID": "sbx_trace_001",
@@ -323,9 +494,69 @@
       ]
     },
     {
+      "scenario": "create_trailing_slash_base",
+      "sdk_version": "2.62.1",
+      "api_url": "http://127.0.0.1:58026/compat/e2b/",
+      "evidence": "measured",
+      "ok": true,
+      "sdk_result": {
+        "sandbox_id": "sbx_trace_001",
+        "sandbox_domain": "sandbox.example.test",
+        "envd_version": "0.8.0",
+        "envd_access_token": "envd-access-token",
+        "traffic_access_token": null,
+        "envd_api_url": "https://49983-sbx_trace_001.sandbox.example.test"
+      },
+      "elapsed_seconds": 0.004,
+      "request_count": 1,
+      "transactions": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/compat/e2b/v2/sandboxes",
+            "headers": {
+              "accept": "*/*",
+              "accept-encoding": "gzip, deflate",
+              "lang": "python",
+              "lang_version": "3.13.18",
+              "package_version": "2.62.1",
+              "publisher": "e2b",
+              "sdk_runtime": "python",
+              "system": "Windows",
+              "user-agent": "e2b-python-sdk/2.62.1",
+              "x-api-key": "e2b_test_key",
+              "content-type": "application/json",
+              "content-length": "48",
+              "host": "127.0.0.1:58026"
+            },
+            "body": {
+              "templateID": "base",
+              "metadata": {},
+              "envVars": {}
+            }
+          },
+          "response": {
+            "status": 201,
+            "headers": {
+              "Content-Type": "application/json"
+            },
+            "body": {
+              "templateID": "base",
+              "sandboxID": "sbx_trace_001",
+              "clientID": "client_trace",
+              "envdVersion": "0.8.0",
+              "envdAccessToken": "envd-access-token",
+              "trafficAccessToken": null,
+              "domain": "sandbox.example.test"
+            }
+          }
+        }
+      ]
+    },
+    {
       "scenario": "delete_flow_compat_base",
       "sdk_version": "2.62.1",
-      "api_url": "http://127.0.0.1:56873/compat/e2b",
+      "api_url": "http://127.0.0.1:64066/compat/e2b",
       "evidence": "measured",
       "ok": true,
       "sdk_result": {
@@ -341,7 +572,7 @@
         "repeated_kill": false,
         "unknown_kill": false
       },
-      "elapsed_seconds": 0.0076,
+      "elapsed_seconds": 0.0097,
       "request_count": 4,
       "transactions": [
         {
@@ -361,7 +592,7 @@
               "x-api-key": "e2b_test_key",
               "content-type": "application/json",
               "content-length": "58",
-              "host": "127.0.0.1:56873"
+              "host": "127.0.0.1:64066"
             },
             "body": {
               "templateID": "trace-template",
@@ -371,6 +602,9 @@
           },
           "response": {
             "status": 201,
+            "headers": {
+              "Content-Type": "application/json"
+            },
             "body": {
               "templateID": "base",
               "sandboxID": "sbx_trace_001",
@@ -397,12 +631,15 @@
               "system": "Windows",
               "user-agent": "e2b-python-sdk/2.62.1",
               "x-api-key": "e2b_test_key",
-              "host": "127.0.0.1:56873"
+              "host": "127.0.0.1:64066"
             },
             "body": null
           },
           "response": {
             "status": 204,
+            "headers": {
+              "Content-Length": "0"
+            },
             "body": null
           }
         },
@@ -421,12 +658,15 @@
               "system": "Windows",
               "user-agent": "e2b-python-sdk/2.62.1",
               "x-api-key": "e2b_test_key",
-              "host": "127.0.0.1:56873"
+              "host": "127.0.0.1:64066"
             },
             "body": null
           },
           "response": {
             "status": 404,
+            "headers": {
+              "Content-Type": "application/json"
+            },
             "body": {
               "code": 404,
               "message": "Sandbox not found"
@@ -448,12 +688,15 @@
               "system": "Windows",
               "user-agent": "e2b-python-sdk/2.62.1",
               "x-api-key": "e2b_test_key",
-              "host": "127.0.0.1:56873"
+              "host": "127.0.0.1:64066"
             },
             "body": null
           },
           "response": {
             "status": 404,
+            "headers": {
+              "Content-Type": "application/json"
+            },
             "body": {
               "code": 404,
               "message": "Sandbox not found"
@@ -465,7 +708,7 @@
     {
       "scenario": "delete_404_without_code",
       "sdk_version": "2.62.1",
-      "api_url": "http://127.0.0.1:56875",
+      "api_url": "http://127.0.0.1:56928",
       "evidence": "measured",
       "ok": false,
       "exception": {
@@ -473,7 +716,7 @@
         "module": "builtins",
         "message": "'code'"
       },
-      "elapsed_seconds": 0.0059,
+      "elapsed_seconds": 0.0074,
       "request_count": 3,
       "transactions": [
         {
@@ -493,7 +736,7 @@
               "x-api-key": "e2b_test_key",
               "content-type": "application/json",
               "content-length": "48",
-              "host": "127.0.0.1:56875"
+              "host": "127.0.0.1:56928"
             },
             "body": {
               "templateID": "base",
@@ -503,6 +746,9 @@
           },
           "response": {
             "status": 201,
+            "headers": {
+              "Content-Type": "application/json"
+            },
             "body": {
               "templateID": "base",
               "sandboxID": "sbx_trace_001",
@@ -529,12 +775,15 @@
               "system": "Windows",
               "user-agent": "e2b-python-sdk/2.62.1",
               "x-api-key": "e2b_test_key",
-              "host": "127.0.0.1:56875"
+              "host": "127.0.0.1:56928"
             },
             "body": null
           },
           "response": {
             "status": 204,
+            "headers": {
+              "Content-Length": "0"
+            },
             "body": null
           }
         },
@@ -553,12 +802,15 @@
               "system": "Windows",
               "user-agent": "e2b-python-sdk/2.62.1",
               "x-api-key": "e2b_test_key",
-              "host": "127.0.0.1:56875"
+              "host": "127.0.0.1:56928"
             },
             "body": null
           },
           "response": {
             "status": 404,
+            "headers": {
+              "Content-Type": "application/json"
+            },
             "body": {
               "message": "Sandbox not found"
             }
