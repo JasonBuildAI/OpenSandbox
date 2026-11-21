@@ -69,6 +69,7 @@ def _run_case(
     include_optional_response_fields: bool = True,
     failure_status: int = 503,
     failure_retry_header: str | None = "true",
+    command_mode: str | None = None,
 ) -> dict[str, Any]:
     log_path = RAW / f"{name}.jsonl"
     server, thread, root_url = start_capture_server(
@@ -79,6 +80,7 @@ def _run_case(
         include_optional_response_fields=include_optional_response_fields,
         failure_status=failure_status,
         failure_retry_header=failure_retry_header,
+        command_mode=command_mode,
     )
     api_url = root_url + base_path
     started = time.perf_counter()
@@ -100,6 +102,9 @@ def _run_case(
             "module": type(exc).__module__,
             "message": str(exc),
         }
+        for attr in ("exit_code", "stdout", "stderr", "error"):
+            if hasattr(exc, attr):
+                result["exception"][attr] = getattr(exc, attr)
     finally:
         result["elapsed_seconds"] = round(time.perf_counter() - started, 4)
         if delay:
@@ -269,6 +274,92 @@ def capture() -> list[dict[str, Any]]:
             "delete_404_without_code",
             malformed_404_flow,
             valid_error_body=False,
+        )
+    )
+
+    def command_base(action: Callable[[Sandbox], Any]) -> Callable[[str], Any]:
+        def run(base: str) -> Any:
+            os.environ["E2B_SANDBOX_URL"] = base
+            return action(_sdk_create(base))
+
+        return run
+
+    def echo_action(sandbox: Sandbox) -> dict[str, Any]:
+        result = sandbox.commands.run("echo hello")
+        return {
+            "sandbox": _sandbox_view(sandbox),
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "exit_code": result.exit_code,
+        }
+
+    cases.append(
+        _run_case(
+            "command_echo",
+            command_base(echo_action),
+            command_mode="echo",
+        )
+    )
+
+    def exit_action(sandbox: Sandbox) -> None:
+        sandbox.commands.run("exit 1")
+
+    cases.append(
+        _run_case(
+            "command_exit_1",
+            command_base(exit_action),
+            command_mode="exit1",
+        )
+    )
+
+    def background_action(sandbox: Sandbox) -> dict[str, Any]:
+        callbacks: list[str] = []
+        handle = sandbox.commands.run("echo hello", background=True)
+        result = handle.wait(on_stdout=callbacks.append)
+        return {
+            "sandbox": _sandbox_view(sandbox),
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "exit_code": result.exit_code,
+            "callbacks": callbacks,
+        }
+
+    cases.append(
+        _run_case(
+            "command_background_chunks",
+            command_base(background_action),
+            command_mode="chunks",
+        )
+    )
+
+    def stdin_action(sandbox: Sandbox) -> dict[str, Any]:
+        handle = sandbox.commands.run("cat", background=True, stdin=True)
+        handle.send_stdin("hi\n")
+        handle.close_stdin()
+        result = handle.wait()
+        return {
+            "sandbox": _sandbox_view(sandbox),
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "exit_code": result.exit_code,
+        }
+
+    cases.append(
+        _run_case(
+            "command_stdin",
+            command_base(stdin_action),
+            command_mode="stdin",
+        )
+    )
+
+    def timeout_action(sandbox: Sandbox) -> None:
+        sandbox.commands.run("sleep 5", timeout=1)
+
+    cases.append(
+        _run_case(
+            "command_timeout",
+            command_base(timeout_action),
+            command_mode="hang",
         )
     )
 

@@ -11,6 +11,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from e2b.envd.process.process_pb import ProcessEvent, StartResponse
+from protobuf import Oneof
+
+CONNECT_JSON = "application/connect+json"
+RPC_PREFIX = "/process.Process/"
+
 
 class CaptureState:
     def __init__(
@@ -23,6 +29,7 @@ class CaptureState:
         include_optional_response_fields: bool = True,
         failure_status: int = 503,
         failure_retry_header: str | None = "true",
+        command_mode: str | None = None,
     ):
         self.log_path = log_path
         self.retry_failures = retry_failures
@@ -34,6 +41,9 @@ class CaptureState:
         self.sandboxes: set[str] = set()
         self.next_id = 1
         self.lock = threading.Lock()
+        self.command_mode = command_mode
+        self.stdin_closed = threading.Event()
+        self.stdin_payloads: list[str] = []
 
 
 class CaptureServer(ThreadingHTTPServer):
@@ -52,6 +62,39 @@ class CaptureServer(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
+def _event_start(pid: int = 4242) -> dict[str, Any]:
+    payload = StartResponse(
+        event=ProcessEvent(event=Oneof("start", ProcessEvent.StartEvent(pid=pid)))
+    )
+    return json.loads(payload.to_json())
+
+
+def _event_data(stream: str, text: str) -> dict[str, Any]:
+    payload = StartResponse(
+        event=ProcessEvent(
+            event=Oneof(
+                "data",
+                ProcessEvent.DataEvent(output=Oneof(stream, text.encode("utf-8"))),
+            )
+        )
+    )
+    return json.loads(payload.to_json())
+
+
+def _event_end(exit_code: int, status: str = "") -> dict[str, Any]:
+    payload = StartResponse(
+        event=ProcessEvent(
+            event=Oneof(
+                "end",
+                ProcessEvent.EndEvent(
+                    exit_code=exit_code, exited=True, status=status
+                ),
+            )
+        )
+    )
+    return json.loads(payload.to_json())
+
+
 class CaptureHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -63,8 +106,25 @@ class CaptureHandler(BaseHTTPRequestHandler):
         return
 
     def _read_body(self) -> bytes:
+        if "chunked" in self.headers.get("Transfer-Encoding", "").lower():
+            return self._read_chunked()
         length = int(self.headers.get("Content-Length", "0"))
         return self.rfile.read(length) if length else b""
+
+    def _read_chunked(self) -> bytes:
+        data = bytearray()
+        while True:
+            line = self.rfile.readline(65536).strip()
+            if not line:
+                break
+            size = int(line.split(b";")[0], 16)
+            if size == 0:
+                while self.rfile.readline(65536) not in (b"\r\n", b"\n", b""):
+                    pass
+                break
+            data += self.rfile.read(size)
+            self.rfile.read(2)
+        return bytes(data)
 
     def _record(
         self,
@@ -72,11 +132,15 @@ class CaptureHandler(BaseHTTPRequestHandler):
         status: int,
         response_body: Any,
         response_headers: dict[str, str] | None = None,
+        *,
+        decoded_body: Any = None,
+        rpc_events: list[Any] | None = None,
     ) -> None:
-        try:
-            decoded_body: Any = json.loads(body.decode("utf-8")) if body else None
-        except Exception:
-            decoded_body = body.decode("utf-8", errors="replace")
+        if decoded_body is None:
+            try:
+                decoded_body = json.loads(body.decode("utf-8")) if body else None
+            except Exception:
+                decoded_body = body.decode("utf-8", errors="replace")
         record = {
             "timestamp": time.time(),
             "method": self.command,
@@ -87,6 +151,8 @@ class CaptureHandler(BaseHTTPRequestHandler):
             "response_headers": response_headers or {},
             "response_body": response_body,
         }
+        if rpc_events is not None:
+            record["rpc_events"] = rpc_events
         with self.state.lock:
             with self.state.log_path.open("a", encoding="utf-8") as log:
                 log.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -120,6 +186,143 @@ class CaptureHandler(BaseHTTPRequestHandler):
             pass
 
     @staticmethod
+    def _decode_frames(body: bytes) -> dict[str, Any]:
+        frames: list[dict[str, Any]] = []
+        offset = 0
+        while offset + 5 <= len(body):
+            flags = body[offset]
+            length = int.from_bytes(body[offset + 1 : offset + 5], "big")
+            payload = body[offset + 5 : offset + 5 + length]
+            offset += 5 + length
+            try:
+                decoded = json.loads(payload.decode("utf-8")) if payload else None
+            except Exception:
+                decoded = payload.decode("utf-8", errors="replace")
+            frames.append({"flags": flags, "json": decoded})
+        return {"frames": frames}
+
+    def _begin_connect_stream(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", CONNECT_JSON)
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+
+    def _write_connect_frame(self, payload: Any, flags: int = 0) -> None:
+        encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        chunk = bytes([flags]) + len(encoded).to_bytes(4, "big") + encoded
+        self.wfile.write(f"{len(chunk):X}\r\n".encode() + chunk + b"\r\n")
+        self.wfile.flush()
+
+    def _end_connect_stream(self) -> None:
+        self.wfile.write(b"0\r\n\r\n")
+        self.wfile.flush()
+
+    def _send_unary(self, payload: Any, headers: dict[str, str] | None = None) -> None:
+        encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            for key, value in (headers or {}).items():
+                self.send_header(key, value)
+            self.end_headers()
+            self.wfile.write(encoded)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            pass
+
+    def _handle_rpc(self, path: str, body: bytes) -> None:
+        ctype = (self.headers.get("Content-Type") or "").lower()
+        if ctype.startswith("application/json"):
+            try:
+                message = json.loads(body.decode("utf-8")) if body else {}
+            except Exception:
+                message = {}
+            decoded: dict[str, Any] = {"messages": [message]}
+        else:
+            decoded = self._decode_frames(body)
+            message = {}
+            if decoded["frames"] and isinstance(decoded["frames"][0].get("json"), dict):
+                message = decoded["frames"][0]["json"]
+        if "input" in message and isinstance(message["input"], dict):
+            encoded = message["input"].get("stdin")
+            if isinstance(encoded, str):
+                import base64
+
+                try:
+                    text = base64.b64decode(encoded).decode(
+                        "utf-8", errors="replace"
+                    )
+                    message["decoded_stdin"] = text
+                    if path in (
+                        f"{RPC_PREFIX}StreamInput",
+                        f"{RPC_PREFIX}SendInput",
+                    ):
+                        self.state.stdin_payloads.append(text)
+                except Exception:
+                    pass
+
+        if path == f"{RPC_PREFIX}Start":
+            self._handle_start(decoded, body)
+            return
+        if path == f"{RPC_PREFIX}CloseStdin":
+            self.state.stdin_closed.set()
+        self._record(
+            body, 200, {}, {"Content-Type": "application/json"}, decoded_body=decoded
+        )
+        self._send_unary({})
+
+    def _handle_start(self, decoded: dict[str, Any], body: bytes) -> None:
+        mode = self.state.command_mode or "echo"
+        events: list[dict[str, Any]] = [_event_start()]
+        try:
+            self._begin_connect_stream()
+            self._write_connect_frame(events[0])
+            if mode == "hang":
+                self._record(
+                    body,
+                    200,
+                    {"events": events},
+                    {"Content-Type": CONNECT_JSON, "Transfer-Encoding": "chunked"},
+                    decoded_body=decoded,
+                    rpc_events=events,
+                )
+                time.sleep(2.0)
+                return
+            if mode == "echo":
+                events.append(_event_data("stdout", "hello\n"))
+                events.append(_event_end(0))
+            elif mode == "exit1":
+                events.append(_event_data("stderr", "boom\n"))
+                events.append(_event_end(1))
+            elif mode == "chunks":
+                events.append(_event_data("stdout", "hel"))
+                events.append(_event_data("stdout", "lo\n"))
+                events.append(_event_end(0))
+            elif mode == "hang":
+                pass
+            elif mode == "stdin":
+                self.state.stdin_closed.wait(timeout=4.0)
+                events.append(
+                    _event_data("stdout", "".join(self.state.stdin_payloads))
+                )
+                events.append(_event_end(0))
+            self._record(
+                body,
+                200,
+                {"events": events},
+                {"Content-Type": CONNECT_JSON, "Transfer-Encoding": "chunked"},
+                decoded_body=decoded,
+                rpc_events=events,
+            )
+            for event in events[1:]:
+                self._write_connect_frame(event)
+            self._write_connect_frame({}, flags=0x02)
+            self._end_connect_stream()
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            pass
+
+
+    @staticmethod
     def _route_key(path: str) -> str:
         """Return the SDK route while ignoring an optional deployment prefix."""
         if path.endswith("/v2/sandboxes"):
@@ -134,7 +337,12 @@ class CaptureHandler(BaseHTTPRequestHandler):
         if self.state.delay:
             time.sleep(self.state.delay)
 
-        route = self._route_key(urlparse(self.path).path)
+        path = urlparse(self.path).path
+        if path.startswith(RPC_PREFIX):
+            self._handle_rpc(path, body)
+            return
+
+        route = self._route_key(path)
         if route != "/v2/sandboxes":
             response = self._error_body(404, "not found")
             response_headers = {"Content-Type": "application/json"}
@@ -230,7 +438,8 @@ class CaptureHandler(BaseHTTPRequestHandler):
             self._send_json(404, response)
 
     def do_GET(self) -> None:
-        if urlparse(self.path).path.endswith("/healthz"):
+        path = urlparse(self.path).path
+        if path.endswith("/healthz") or path == "/health":
             self._record(
                 b"",
                 200,
@@ -259,6 +468,7 @@ def start_capture_server(
     include_optional_response_fields: bool = True,
     failure_status: int = 503,
     failure_retry_header: str | None = "true",
+    command_mode: str | None = None,
 ) -> tuple[CaptureServer, threading.Thread, str]:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_path.write_text("", encoding="utf-8")
@@ -270,6 +480,7 @@ def start_capture_server(
         include_optional_response_fields=include_optional_response_fields,
         failure_status=failure_status,
         failure_retry_header=failure_retry_header,
+        command_mode=command_mode,
     )
     server = CaptureServer(("127.0.0.1", port), state)
     thread = threading.Thread(target=server.serve_forever, daemon=True)

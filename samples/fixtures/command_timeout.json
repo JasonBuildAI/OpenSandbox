@@ -1,0 +1,115 @@
+{
+  "scenario": "command_timeout",
+  "sdk_version": "2.62.1",
+  "api_url": "http://127.0.0.1:58167",
+  "evidence": "measured",
+  "ok": false,
+  "exception": {
+    "type": "TimeoutException",
+    "module": "e2b.exceptions",
+    "message": "Request timed out: This error is likely due to exceeding 'timeout' — the total time a long running request (like process or directory watch) can be active — or 'request_timeout'. You can modify these by passing 'timeout' or 'request_timeout' when making the request. Use '0' to disable the timeout."
+  },
+  "elapsed_seconds": 1.0068,
+  "request_count": 2,
+  "transactions": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/v2/sandboxes",
+        "headers": {
+          "accept": "*/*",
+          "accept-encoding": "gzip, deflate",
+          "lang": "python",
+          "lang_version": "3.13.18",
+          "package_version": "2.62.1",
+          "publisher": "e2b",
+          "sdk_runtime": "python",
+          "system": "Windows",
+          "user-agent": "e2b-python-sdk/2.62.1",
+          "x-api-key": "e2b_test_key",
+          "content-type": "application/json",
+          "content-length": "48",
+          "host": "127.0.0.1:58167"
+        },
+        "body": {
+          "templateID": "base",
+          "metadata": {},
+          "envVars": {}
+        }
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "templateID": "base",
+          "sandboxID": "sbx_trace_001",
+          "clientID": "client_trace",
+          "envdVersion": "0.8.0",
+          "envdAccessToken": "envd-access-token",
+          "trafficAccessToken": null,
+          "domain": "sandbox.example.test"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "path": "/process.Process/Start",
+        "headers": {
+          "keepalive-ping-interval": "50",
+          "user-agent": "connectrpc/0.12.1",
+          "connect-protocol-version": "1",
+          "connect-accept-encoding": "identity",
+          "connect-content-encoding": "identity",
+          "content-type": "application/connect+json",
+          "connect-timeout-ms": "1000",
+          "x-access-token": "envd-access-token",
+          "e2b-sandbox-id": "sbx_trace_001",
+          "e2b-sandbox-port": "49983",
+          "accept": "*/*",
+          "accept-encoding": "zstd,gzip,br",
+          "host": "127.0.0.1:58167",
+          "transfer-encoding": "chunked"
+        },
+        "body": {
+          "frames": [
+            {
+              "flags": 0,
+              "json": {
+                "process": {
+                  "cmd": "/bin/bash",
+                  "args": [
+                    "-l",
+                    "-c",
+                    "sleep 5"
+                  ]
+                },
+                "stdin": false
+              }
+            }
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/connect+json",
+          "Transfer-Encoding": "chunked"
+        },
+        "body": {
+          "events": [
+            {
+              "event": {
+                "start": {
+                  "pid": 4242
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
